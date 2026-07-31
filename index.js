@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.3.2';
+    const SCRIPT_VERSION = '2.3.3';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -749,7 +749,7 @@
         }
     }
 
-    function waitForManagerMenu(timeout = 6000) {
+    function waitForManagerMenu(timeout = 8000) {
         return new Promise((resolve, reject) => {
             const startedAt = Date.now();
             const check = () => {
@@ -782,7 +782,22 @@
                 script.onerror = () => reject(new Error('重新加载扩展脚本失败'));
                 document.body.appendChild(script);
             });
-            await waitForManagerMenu();
+            try {
+                await waitForManagerMenu();
+            } catch (moduleError) {
+                // Some embedded WebViews report module load success before the
+                // async extension initializer completes. Evaluate the fetched
+                // source as a fallback so the update still takes effect.
+                const response = await fetch(cacheBustedUrl.href, { cache: 'no-store' });
+                if (!response.ok) throw moduleError;
+                const source = await response.text();
+                try {
+                    new Function(`${source}\n//# sourceURL=${cacheBustedUrl.href}`)();
+                } catch (evaluationError) {
+                    throw new Error(`${moduleError.message}；备用加载失败：${evaluationError.message || evaluationError}`);
+                }
+                await waitForManagerMenu();
+            }
             $(`#${MENU_BTN_ID}`).trigger('click');
         })();
         try {
