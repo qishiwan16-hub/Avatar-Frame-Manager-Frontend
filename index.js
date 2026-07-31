@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.3.0';
+    const SCRIPT_VERSION = '2.3.1';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -749,13 +749,47 @@
         }
     }
 
+    function waitForManagerMenu(timeout = 6000) {
+        return new Promise((resolve, reject) => {
+            const startedAt = Date.now();
+            const check = () => {
+                if ($(`#${MENU_BTN_ID}`).length) return resolve();
+                if (Date.now() - startedAt >= timeout) return reject(new Error('扩展菜单未能重新初始化'));
+                setTimeout(check, 100);
+            };
+            check();
+        });
+    }
+
     async function hotReloadUpdatedExtension() {
-        if (typeof window.__afmHotCleanup === 'function') window.__afmHotCleanup();
-        const script = Array.from(document.scripts || []).find(item => new RegExp(`/scripts/extensions/(?:third-party/)?${EXTENSION_DEFAULT_FOLDER}/index\\.js(?:[?#]|$)`, 'i').test(item.src || ''));
-        const scriptUrl = INITIAL_SCRIPT_URL || (script && script.src) || `/scripts/extensions/third-party/${EXTENSION_DEFAULT_FOLDER}/index.js`;
-        const separator = scriptUrl.includes('?') ? '&' : '?';
-        await import(`${scriptUrl}${separator}afm_update=${Date.now()}`);
-        setTimeout(() => $(`#${MENU_BTN_ID}`).trigger('click'), 700);
+        if (window.__afmHotReloadPromise) return window.__afmHotReloadPromise;
+        window.__afmHotReloadPromise = (async () => {
+            if (typeof window.__afmHotCleanup === 'function') window.__afmHotCleanup();
+            const scriptPattern = new RegExp(`/scripts/extensions/(?:third-party/)?${EXTENSION_DEFAULT_FOLDER}/index\\.js(?:[?#]|$)`, 'i');
+            const scripts = Array.from(document.scripts || []).filter(item => scriptPattern.test(item.src || ''));
+            const scriptUrl = INITIAL_SCRIPT_URL || (scripts[0] && scripts[0].src) || `/scripts/extensions/third-party/${EXTENSION_DEFAULT_FOLDER}/index.js`;
+            const cacheBustedUrl = new URL(scriptUrl, document.baseURI || window.location.href);
+            cacheBustedUrl.searchParams.set('afm_update', String(Date.now()));
+
+            // Match SillyTavern's native extension loader: inject a fresh module script.
+            scripts.forEach(script => script.remove());
+            await new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.type = 'module';
+                script.async = true;
+                script.src = cacheBustedUrl.href;
+                script.onload = resolve;
+                script.onerror = () => reject(new Error('重新加载扩展脚本失败'));
+                document.body.appendChild(script);
+            });
+            await waitForManagerMenu();
+            $(`#${MENU_BTN_ID}`).trigger('click');
+        })();
+        try {
+            await window.__afmHotReloadPromise;
+        } finally {
+            window.__afmHotReloadPromise = null;
+        }
     }
 
     async function updateExtensionFromSettings() {
