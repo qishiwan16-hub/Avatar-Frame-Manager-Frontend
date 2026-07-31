@@ -6,10 +6,11 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.1.1';
+    const SCRIPT_VERSION = '2.2.0';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
+    const INITIAL_SCRIPT_URL = document.currentScript && document.currentScript.src || '';
     
     // 数据库配置
     const DB_NAME = 'ST_AvatarFrameDB';
@@ -28,16 +29,16 @@
         return normalized;
     }
 
-    function normalizePersonaBindings(bindings) {
+    function normalizeThemeBindings(bindings) {
         if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) return {};
         const normalized = {};
         Object.entries(bindings).forEach(([rawId, rawBinding]) => {
             const binding = rawBinding && typeof rawBinding === 'object' ? rawBinding : {};
-            const personaId = String(binding.personaId || rawId || '').trim();
-            if (!personaId) return;
-            normalized[personaId] = {
-                personaId,
-                personaName: String(binding.personaName || personaId).trim() || personaId,
+            const themeId = String(binding.themeId || rawId || '').trim();
+            if (!themeId) return;
+            normalized[themeId] = {
+                themeId,
+                themeName: String(binding.themeName || themeId).trim() || themeId,
                 userFrameSrc: String(binding.userFrameSrc || binding.frameSrc || binding.src || '').trim(),
                 charFrameSrc: String(binding.charFrameSrc || '').trim(),
                 userSettings: normalizeBindingSettings(binding.userSettings || binding.settings),
@@ -48,13 +49,13 @@
         return normalized;
     }
 
-    function clearFrameFromPersonaBindings(data, role, frameSrc) {
-        if (!data || !data.personaBindings || !frameSrc) return;
+    function clearFrameFromThemeBindings(data, role, frameSrc) {
+        if (!data || !data.themeBindings || !frameSrc) return;
         const key = role === 'char' ? 'charFrameSrc' : 'userFrameSrc';
-        Object.keys(data.personaBindings).forEach(personaId => {
-            const binding = data.personaBindings[personaId];
+        Object.keys(data.themeBindings).forEach(themeId => {
+            const binding = data.themeBindings[themeId];
             if (binding[key] === frameSrc) binding[key] = '';
-            if (!binding.userFrameSrc && !binding.charFrameSrc) delete data.personaBindings[personaId];
+            if (!binding.userFrameSrc && !binding.charFrameSrc) delete data.themeBindings[themeId];
         });
     }
 
@@ -83,7 +84,7 @@
         if (!data.pseudoTarget) data.pseudoTarget = 'after';
         data.userSettings = normalizeBindingSettings(data.userSettings);
         data.charSettings = normalizeBindingSettings(data.charSettings);
-        data.personaBindings = normalizePersonaBindings(data.personaBindings);
+        data.themeBindings = normalizeThemeBindings(data.themeBindings);
         return data;
     }
 
@@ -97,44 +98,33 @@
         return {};
     }
 
-    function getCurrentPersonaSnapshot() {
+    function getCurrentThemeSnapshot() {
         const context = getSillyTavernContext();
-        const $personaSelect = $('#persona-management, #persona_management, select[name*="persona"], select[id*="persona"]').filter(':visible').first();
-        const $personaCard = $('.persona_block.selected, .persona_block.active, [data-persona-id].selected, [data-persona-id].active').first();
-        const selectedId = $personaSelect.length ? String($personaSelect.val() || '').trim() : '';
-        const selectedName = $personaSelect.length ? String($personaSelect.find('option:selected').text() || '').trim() : '';
-        const cardId = $personaCard.length ? String($personaCard.attr('data-persona-id') || $personaCard.attr('data-avatar-id') || $personaCard.attr('imgfile') || '').trim() : '';
-        const cardName = $personaCard.length ? String($personaCard.attr('title') || $personaCard.find('.persona_name, .ch_name').first().text() || '').trim() : '';
-        const personaId = String(
-            context.personaId || context.currentPersonaId || context.user_avatar ||
-            window.currentPersonaId || window.user_avatar || cardId || selectedId || ''
+        const $themeSelect = $('#themes').first();
+        const selectedId = $themeSelect.length ? String($themeSelect.val() || '').trim() : '';
+        const selectedName = $themeSelect.length ? String($themeSelect.find('option:selected').text() || '').trim() : '';
+        const themeId = String(
+            context.powerUserSettings?.theme || context.power_user?.theme || window.power_user?.theme || selectedId || ''
         ).trim();
-        const personaName = String(
-            context.personaName || context.currentPersonaName || context.name1 || cardName || selectedName || personaId
-        ).trim() || personaId;
-        return { id: personaId, name: personaName };
+        const themeName = String(selectedName || themeId).trim() || themeId;
+        return { id: themeId, name: themeName };
     }
 
-    function getPersonaOptions(data = null) {
+    function getThemeOptions(data = null) {
         const options = new Map();
         const addOption = (id, name = id) => {
-            const personaId = String(id || '').trim();
-            if (!personaId || personaId === 'none' || personaId === 'null') return;
-            const personaName = String(name || personaId).trim() || personaId;
-            if (!options.has(personaId) || options.get(personaId).name === personaId) options.set(personaId, { id: personaId, name: personaName });
+            const themeId = String(id || '').trim();
+            if (!themeId || themeId === 'none' || themeId === 'null') return;
+            const themeName = String(name || themeId).trim() || themeId;
+            if (!options.has(themeId) || options.get(themeId).name === themeId) options.set(themeId, { id: themeId, name: themeName });
         };
-        const current = getCurrentPersonaSnapshot();
+        const current = getCurrentThemeSnapshot();
         addOption(current.id, current.name);
-        $('#persona-management option, #persona_management option, select[name*="persona"] option, select[id*="persona"] option').each(function() {
+        $('#themes option').each(function() {
             addOption($(this).val(), $(this).text());
         });
-        $('.persona_block, [data-persona-id], [data-avatar-id]').each(function() {
-            const id = $(this).attr('data-persona-id') || $(this).attr('data-avatar-id') || $(this).attr('imgfile');
-            const name = $(this).attr('title') || $(this).find('.persona_name, .ch_name').first().text() || id;
-            addOption(id, name);
-        });
         const context = getSillyTavernContext();
-        const sources = [context.personas, context.persona_descriptions, window.personas, window.persona_descriptions];
+        const sources = [context.themes, context.theme_descriptions, window.themes, window.theme_descriptions];
         sources.forEach(source => {
             if (!source || typeof source !== 'object' || Array.isArray(source)) return;
             Object.entries(source).forEach(([id, value]) => {
@@ -142,7 +132,7 @@
                 addOption(id, name);
             });
         });
-        if (data && data.personaBindings) Object.values(data.personaBindings).forEach(binding => addOption(binding.personaId, binding.personaName));
+        if (data && data.themeBindings) Object.values(data.themeBindings).forEach(binding => addOption(binding.themeId, binding.themeName));
         return Array.from(options.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
     }
 
@@ -382,14 +372,14 @@
             userSettings: isUserScope ? normalized.userSettings : null,
             charSettings: isCharScope ? normalized.charSettings : null,
             pseudoTarget: normalized.pseudoTarget,
-            personaBindings: normalized.personaBindings
+            themeBindings: normalized.themeBindings
         };
         const settingsBackup = {
             pseudoTarget: backup.pseudoTarget
         };
         if (backup.userSettings) settingsBackup.userSettings = backup.userSettings;
         if (backup.charSettings) settingsBackup.charSettings = backup.charSettings;
-        settingsBackup.personaBindings = backup.personaBindings;
+        settingsBackup.themeBindings = backup.themeBindings;
         const entries = [
             { name: 'avatar-frame-backup.json', data: JSON.stringify(backup, null, 2) },
             { name: 'config/avatar-frame-settings.json', data: JSON.stringify(settingsBackup, null, 2) }
@@ -459,8 +449,8 @@
         if (css) $('head').append(`<style id="${APPLIED_STYLE_ID}">${css}</style>`);
     }
 
-    let lastPersonaBindingId = null;
-    let personaBindingSyncPromise = Promise.resolve();
+    let lastThemeBindingId = null;
+    let themeBindingSyncPromise = Promise.resolve();
 
     function bindingSettingsEqual(left, right) {
         const a = normalizeBindingSettings(left);
@@ -468,13 +458,13 @@
         return ['top', 'left', 'width', 'height'].every(key => Number(a[key]) === Number(b[key]));
     }
 
-    async function syncPersonaBinding(force = false) {
-        const persona = getCurrentPersonaSnapshot();
-        if (!persona.id || (!force && persona.id === lastPersonaBindingId)) return;
-        lastPersonaBindingId = persona.id;
-        personaBindingSyncPromise = personaBindingSyncPromise.then(async () => {
+    async function syncThemeBinding(force = false) {
+        const theme = getCurrentThemeSnapshot();
+        if (!theme.id || (!force && theme.id === lastThemeBindingId)) return;
+        lastThemeBindingId = theme.id;
+        themeBindingSyncPromise = themeBindingSyncPromise.then(async () => {
             const data = await DataManager.load();
-            const binding = data.personaBindings[persona.id];
+            const binding = data.themeBindings[theme.id];
             const userFrameExists = binding && binding.userFrameSrc && data.userFrames.some(frame => frame.src === binding.userFrameSrc);
             const charFrameExists = binding && binding.charFrameSrc && data.charFrames.some(frame => frame.src === binding.charFrameSrc);
             const nextUserFrameSrc = userFrameExists ? binding.userFrameSrc : null;
@@ -492,20 +482,144 @@
                 await DataManager.save(data);
             }
             await applyInjectedCSS(data);
-            if (typeof window.CustomEvent === 'function') window.dispatchEvent(new CustomEvent('afm-persona-binding-applied', { detail: persona }));
+            if (typeof window.CustomEvent === 'function') window.dispatchEvent(new CustomEvent('afm-theme-binding-applied', { detail: theme }));
         }).catch(error => console.warn('[头像框管理器] 美化绑定同步失败', error));
-        return personaBindingSyncPromise;
+        return themeBindingSyncPromise;
     }
 
-    function installPersonaBindingWatcher() {
-        if (window.__afmPersonaBindingWatcherTimer) clearInterval(window.__afmPersonaBindingWatcherTimer);
-        window.__afmPersonaBindingWatcherTimer = setInterval(() => syncPersonaBinding(false), 1200);
+    function installThemeBindingWatcher() {
+        if (window.__afmThemeBindingWatcherTimer) clearInterval(window.__afmThemeBindingWatcherTimer);
+        window.__afmThemeBindingWatcherTimer = setInterval(() => syncThemeBinding(false), 1200);
+        $('#themes').off('change.afmThemeBinding').on('change.afmThemeBinding', () => syncThemeBinding(true));
         const context = getSillyTavernContext();
         const source = context.eventSource || window.eventSource;
-        const types = context.event_types || window.event_types || {};
-        const eventNames = Array.from(new Set([types.PERSONA_CHANGED, 'persona_changed', 'personaChanged'].filter(Boolean)));
-        if (source && typeof source.on === 'function') eventNames.forEach(name => source.on(name, () => syncPersonaBinding(true)));
-        syncPersonaBinding(true);
+        const types = context.eventTypes || context.event_types || window.event_types || {};
+        const eventNames = Array.from(new Set([types.SETTINGS_UPDATED].filter(Boolean)));
+        if (source && typeof source.on === 'function') eventNames.forEach(name => source.on(name, () => syncThemeBinding(true)));
+        syncThemeBinding(true);
+    }
+
+    const EXTENSION_RAW_MANIFEST_URL = 'https://raw.githubusercontent.com/qishiwan16-hub/Avatar-Frame-Manager-Frontend/main/manifest.json';
+    const EXTENSION_DEFAULT_FOLDER = 'Avatar-Frame-Manager-Frontend';
+    const extensionUpdateState = {
+        phase: 'idle',
+        message: '点击检查 GitHub 是否有更新',
+        canUpdate: false,
+        latestVersion: '',
+        extensionName: EXTENSION_DEFAULT_FOLDER,
+        global: false
+    };
+
+    function getInstalledExtensionName() {
+        const scripts = Array.from(document.scripts || []);
+        const current = INITIAL_SCRIPT_URL || scripts.find(script => new RegExp(`/scripts/extensions/(?:third-party/)?${EXTENSION_DEFAULT_FOLDER}/index\\.js(?:[?#]|$)`, 'i').test(script.src || ''))?.src || '';
+        if (!current) return EXTENSION_DEFAULT_FOLDER;
+        const match = current.match(/\/scripts\/extensions\/(?:third-party\/)?([^/]+)\/index\.js(?:[?#]|$)/i);
+        return match ? decodeURIComponent(match[1]) : EXTENSION_DEFAULT_FOLDER;
+    }
+
+    function getExtensionRequestHeaders() {
+        const context = getSillyTavernContext();
+        try {
+            if (typeof context.getRequestHeaders === 'function') return context.getRequestHeaders();
+        } catch (error) {}
+        try {
+            if (typeof window.getRequestHeaders === 'function') return window.getRequestHeaders();
+        } catch (error) {}
+        const headers = { 'Content-Type': 'application/json' };
+        if (window.token) headers['X-CSRF-Token'] = window.token;
+        return headers;
+    }
+
+    async function requestExtensionApi(endpoint, options = {}) {
+        const names = Array.from(new Set([options.extensionName, getInstalledExtensionName(), EXTENSION_DEFAULT_FOLDER].filter(Boolean)));
+        const scopes = options.global === undefined ? [false, true] : [!!options.global];
+        let lastError = '扩展更新接口不可用';
+        for (const extensionName of names) {
+            for (const global of scopes) {
+                const response = await fetch(`/api/extensions/${endpoint}`, {
+                    method: 'POST',
+                    headers: getExtensionRequestHeaders(),
+                    body: JSON.stringify({ extensionName, global })
+                });
+                if (response.ok) return { data: await response.json(), extensionName, global };
+                const text = await response.text();
+                lastError = text || response.statusText || lastError;
+                if (response.status !== 404) break;
+            }
+        }
+        throw new Error(lastError);
+    }
+
+    async function getLatestManifestVersion() {
+        try {
+            const response = await fetch(`${EXTENSION_RAW_MANIFEST_URL}?afm=${Date.now()}`);
+            if (!response.ok) return '';
+            const manifest = await response.json();
+            return String(manifest.version || '').trim();
+        } catch (error) {
+            return '';
+        }
+    }
+
+    async function checkExtensionUpdate() {
+        extensionUpdateState.phase = 'checking';
+        extensionUpdateState.message = '正在检查 GitHub 更新...';
+        extensionUpdateState.canUpdate = false;
+        try {
+            const result = await requestExtensionApi('version');
+            extensionUpdateState.extensionName = result.extensionName;
+            extensionUpdateState.global = result.global;
+            extensionUpdateState.latestVersion = await getLatestManifestVersion();
+            extensionUpdateState.canUpdate = result.data.isUpToDate === false;
+            extensionUpdateState.phase = extensionUpdateState.canUpdate ? 'available' : 'latest';
+            extensionUpdateState.message = extensionUpdateState.canUpdate
+                ? `发现新版本${extensionUpdateState.latestVersion ? ` v${extensionUpdateState.latestVersion}` : ''}`
+                : `当前已是最新版本 v${SCRIPT_VERSION}`;
+        } catch (error) {
+            extensionUpdateState.phase = 'error';
+            extensionUpdateState.message = `检查失败：${error.message || error}`;
+            extensionUpdateState.canUpdate = false;
+        }
+    }
+
+    async function hotReloadUpdatedExtension() {
+        if (typeof window.__afmHotCleanup === 'function') window.__afmHotCleanup();
+        const script = Array.from(document.scripts || []).find(item => new RegExp(`/scripts/extensions/(?:third-party/)?${EXTENSION_DEFAULT_FOLDER}/index\\.js(?:[?#]|$)`, 'i').test(item.src || ''));
+        const scriptUrl = INITIAL_SCRIPT_URL || (script && script.src) || `/scripts/extensions/third-party/${EXTENSION_DEFAULT_FOLDER}/index.js`;
+        const separator = scriptUrl.includes('?') ? '&' : '?';
+        await import(`${scriptUrl}${separator}afm_update=${Date.now()}`);
+        setTimeout(() => $(`#${MENU_BTN_ID}`).trigger('click'), 700);
+    }
+
+    async function updateExtensionFromSettings() {
+        extensionUpdateState.phase = 'updating';
+        extensionUpdateState.message = '正在更新扩展...';
+        extensionUpdateState.canUpdate = false;
+        let result;
+        try {
+            result = await requestExtensionApi('update', {
+                extensionName: extensionUpdateState.extensionName,
+                global: extensionUpdateState.global
+            });
+            if (result.data.isUpToDate) {
+                extensionUpdateState.phase = 'latest';
+                extensionUpdateState.message = `当前已是最新版本 v${SCRIPT_VERSION}`;
+                return;
+            }
+        } catch (error) {
+            extensionUpdateState.phase = 'error';
+            extensionUpdateState.message = `更新失败：${error.message || error}`;
+            return;
+        }
+
+        try {
+            if (window.toastr) toastr.success(`扩展已更新到 ${result.data.shortCommitHash || '最新提交'}`);
+            await hotReloadUpdatedExtension();
+        } catch (error) {
+            extensionUpdateState.phase = 'error';
+            extensionUpdateState.message = `扩展已更新，但无法热加载，请刷新页面：${error.message || error}`;
+        }
     }
     
     await applyInjectedCSS();
@@ -720,6 +834,8 @@
             .afm-backup-actions { display: flex; gap: 8px; flex-wrap: wrap; }
             .afm-backup-btn { flex: 1 1 160px; padding: 9px 10px; border-radius: 18px; border: 1px solid rgba(0,0,0,0.1); background: rgba(255,255,255,0.55); color: inherit; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; }
             .afm-backup-btn.primary { background: var(--SmartThemeQuoteColor); color: white; }
+            .afm-update-status { padding: 9px 10px; margin-bottom: 10px; border-left: 3px solid var(--SmartThemeQuoteColor); background: rgba(0,0,0,0.04); font-size: 0.84em; line-height: 1.45; overflow-wrap: anywhere; }
+            .afm-update-status.error { border-left-color: #d65353; color: #d65353; }
 
             /* 设置面板 */
             .afm-settings-container { padding: 10px 5px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 20px; }
@@ -939,16 +1055,26 @@
                         <button class="afm-backup-btn" id="btn-import-plugin-zip"><i class="fa-solid fa-upload"></i> 导入本插件备份 ZIP</button>
                     </div>
                 </div>
+                <div class="afm-setting-group">
+                    <div class="afm-setting-header">
+                        <span><i class="fa-solid fa-cloud-arrow-down"></i> 扩展更新</span>
+                    </div>
+                    <div class="afm-update-status ${extensionUpdateState.phase === 'error' ? 'error' : ''}">${escapeHTML(extensionUpdateState.message)}</div>
+                    <div class="afm-backup-actions">
+                        <button class="afm-backup-btn" id="afm-check-update" ${extensionUpdateState.phase === 'checking' || extensionUpdateState.phase === 'updating' ? 'disabled' : ''}><i class="fa-solid fa-arrows-rotate ${extensionUpdateState.phase === 'checking' ? 'fa-spin' : ''}"></i> 检查更新</button>
+                        ${extensionUpdateState.canUpdate ? `<button class="afm-backup-btn primary" id="afm-apply-update"><i class="fa-solid fa-download"></i> 更新${extensionUpdateState.latestVersion ? `到 v${escapeHTML(extensionUpdateState.latestVersion)}` : ''}</button>` : ''}
+                    </div>
+                </div>
             </div>
         `;
     }
 
-    function createBindingsHTML(data, selectedPersonaId = null) {
-        const currentPersona = getCurrentPersonaSnapshot();
-        const options = getPersonaOptions(data);
-        const bindings = Object.values(data.personaBindings || {}).sort((a, b) => a.personaName.localeCompare(b.personaName, 'zh-Hans-CN'));
-        const selectedId = String(selectedPersonaId || currentPersona.id || options[0]?.id || bindings[0]?.personaId || '').trim();
-        const selectedBinding = data.personaBindings[selectedId] || null;
+    function createBindingsHTML(data, selectedThemeId = null) {
+        const currentTheme = getCurrentThemeSnapshot();
+        const options = getThemeOptions(data);
+        const bindings = Object.values(data.themeBindings || {}).sort((a, b) => a.themeName.localeCompare(b.themeName, 'zh-Hans-CN'));
+        const selectedId = String(selectedThemeId || currentTheme.id || options[0]?.id || bindings[0]?.themeId || '').trim();
+        const selectedBinding = data.themeBindings[selectedId] || null;
         const userSettings = selectedBinding ? selectedBinding.userSettings : data.userSettings;
         const charSettings = selectedBinding ? selectedBinding.charSettings : data.charSettings;
         const selectedUserFrame = selectedBinding ? selectedBinding.userFrameSrc : '';
@@ -966,12 +1092,12 @@
         `;
         const renderThumb = (src, role) => src ? `<img class="afm-binding-thumb" src="${escapeHTML(src)}" alt="${role}">` : `<div class="afm-binding-thumb-empty">${role}</div>`;
         const bindingItems = bindings.length ? bindings.map(binding => `
-            <div class="afm-binding-item ${binding.personaId === selectedId ? 'active' : ''}" data-persona-id="${escapeHTML(binding.personaId)}">
+            <div class="afm-binding-item ${binding.themeId === selectedId ? 'active' : ''}" data-theme-id="${escapeHTML(binding.themeId)}">
                 ${renderThumb(binding.userFrameSrc, 'User')}
                 ${renderThumb(binding.charFrameSrc, 'Char')}
                 <div class="afm-binding-info">
-                    <div class="afm-binding-name">${escapeHTML(binding.personaName)}</div>
-                    <div class="afm-binding-meta">${escapeHTML(binding.personaId)}</div>
+                    <div class="afm-binding-name">${escapeHTML(binding.themeName)}</div>
+                    <div class="afm-binding-meta">${escapeHTML(binding.themeId)}</div>
                 </div>
                 <button class="afm-binding-edit" type="button" title="编辑绑定"><i class="fa-solid fa-pen"></i></button>
             </div>
@@ -982,18 +1108,18 @@
                 <div class="afm-setting-group">
                     <div class="afm-setting-header">
                         <span><i class="fa-solid fa-link"></i> 美化绑定</span>
-                        <button class="afm-binding-action" id="afm-refresh-personas" type="button" title="刷新美化列表"><i class="fa-solid fa-arrows-rotate"></i></button>
+                        <button class="afm-binding-action" id="afm-refresh-themes" type="button" title="刷新美化列表"><i class="fa-solid fa-arrows-rotate"></i></button>
                     </div>
-                    <div class="afm-binding-current"><strong>当前美化：${escapeHTML(currentPersona.name || '未检测到')}</strong><code>${escapeHTML(currentPersona.id || '未检测到美化标识')}</code></div>
+                    <div class="afm-binding-current"><strong>当前美化：${escapeHTML(currentTheme.name || '未检测到')}</strong><code>${escapeHTML(currentTheme.id || '未检测到美化标识')}</code></div>
                     <div class="afm-binding-field">
-                        <label class="afm-binding-field-label" for="afm-binding-persona-select">选择美化</label>
-                        <select id="afm-binding-persona-select" class="afm-binding-select">
+                        <label class="afm-binding-field-label" for="afm-binding-theme-select">选择美化</label>
+                        <select id="afm-binding-theme-select" class="afm-binding-select">
                             ${options.length ? options.map(option => `<option value="${escapeHTML(option.id)}" ${option.id === selectedId ? 'selected' : ''}>${escapeHTML(option.name)} · ${escapeHTML(option.id)}</option>`).join('') : '<option value="">未检测到美化</option>'}
                         </select>
                     </div>
                     <div class="afm-binding-field">
-                        <label class="afm-binding-field-label" for="afm-binding-persona-id">美化标识</label>
-                        <input id="afm-binding-persona-id" class="afm-binding-select" type="text" value="${escapeHTML(selectedId)}" placeholder="输入美化 ID">
+                        <label class="afm-binding-field-label" for="afm-binding-theme-id">美化标识</label>
+                        <input id="afm-binding-theme-id" class="afm-binding-select" type="text" value="${escapeHTML(selectedId)}" placeholder="输入美化 ID">
                     </div>
                     <div class="afm-binding-field">
                         <label class="afm-binding-field-label" for="afm-binding-user-frame">User 头像框</label>
@@ -1120,8 +1246,8 @@
 
         const $popup = $(popupHTML);
         $('body').append($popup);
-        let selectedBindingPersonaId = getCurrentPersonaSnapshot().id || '';
-        let personaBindingAppliedHandler = null;
+        let selectedBindingThemeId = getCurrentThemeSnapshot().id || '';
+        let themeBindingAppliedHandler = null;
 
         const showAFMChoiceDialog = ({ title, message, details = [], options = [] }) => new Promise(resolve => {
             const detailHTML = details.length ? `<div class="afm-modal-details">${details.map(item => `<div>${escapeHTML(item)}</div>`).join('')}</div>` : '';
@@ -1272,7 +1398,7 @@
 
         // --- 绑定关闭逻辑 ---
         const closePopup = () => {
-            if (personaBindingAppliedHandler) window.removeEventListener('afm-persona-binding-applied', personaBindingAppliedHandler);
+            if (themeBindingAppliedHandler) window.removeEventListener('afm-theme-binding-applied', themeBindingAppliedHandler);
             $popup.fadeOut(200, () => $popup.remove());
         };
         $popup.find('.nsk-close').on('click', closePopup);
@@ -1349,7 +1475,7 @@
         };
 
         const renderBindings = () => {
-            $popup.find('#view-bindings').html(createBindingsHTML(currentData, selectedBindingPersonaId));
+            $popup.find('#view-bindings').html(createBindingsHTML(currentData, selectedBindingThemeId));
             bindBindingEvents();
         };
 
@@ -1364,11 +1490,11 @@
         }
 
         function bindBindingEvents() {
-            $popup.find('#afm-binding-persona-select').on('change', function() {
-                selectedBindingPersonaId = String($(this).val() || '').trim();
+            $popup.find('#afm-binding-theme-select').on('change', function() {
+                selectedBindingThemeId = String($(this).val() || '').trim();
                 renderBindings();
             });
-            $popup.find('#afm-refresh-personas').on('click', async function() {
+            $popup.find('#afm-refresh-themes').on('click', async function() {
                 currentData = await DataManager.load();
                 renderBindings();
             });
@@ -1381,21 +1507,21 @@
             });
             $popup.find('.afm-binding-item').on('click', function(e) {
                 if ($(e.target).closest('.afm-binding-edit').length) return;
-                selectedBindingPersonaId = String($(this).data('persona-id') || '').trim();
+                selectedBindingThemeId = String($(this).data('theme-id') || '').trim();
                 renderBindings();
             });
             $popup.find('.afm-binding-edit').on('click', function(e) {
                 e.stopPropagation();
-                selectedBindingPersonaId = String($(this).closest('.afm-binding-item').data('persona-id') || '').trim();
+                selectedBindingThemeId = String($(this).closest('.afm-binding-item').data('theme-id') || '').trim();
                 renderBindings();
             });
             $popup.find('#afm-save-binding').on('click', async function() {
-                const personaId = String($popup.find('#afm-binding-persona-id').val() || '').trim();
-                const selectedOptionId = String($popup.find('#afm-binding-persona-select').val() || '').trim();
-                const personaName = selectedOptionId === personaId ? String($popup.find('#afm-binding-persona-select option:selected').text() || personaId).split(' · ')[0].trim() : personaId;
+                const themeId = String($popup.find('#afm-binding-theme-id').val() || '').trim();
+                const selectedOptionId = String($popup.find('#afm-binding-theme-select').val() || '').trim();
+                const themeName = selectedOptionId === themeId ? String($popup.find('#afm-binding-theme-select option:selected').text() || themeId).split(' · ')[0].trim() : themeId;
                 const userFrameSrc = String($popup.find('#afm-binding-user-frame').val() || '').trim();
                 const charFrameSrc = String($popup.find('#afm-binding-char-frame').val() || '').trim();
-                if (!personaId) {
+                if (!themeId) {
                     if (window.toastr) toastr.warning('请先选择或输入美化标识');
                     return;
                 }
@@ -1404,22 +1530,22 @@
                     return;
                 }
                 currentData = await DataManager.load();
-                currentData.personaBindings[personaId] = {
-                    personaId,
-                    personaName,
+                currentData.themeBindings[themeId] = {
+                    themeId,
+                    themeName,
                     userFrameSrc,
                     charFrameSrc,
                     userSettings: readBindingSettings('user'),
                     charSettings: readBindingSettings('char'),
                     updatedAt: Date.now()
                 };
-                selectedBindingPersonaId = personaId;
-                const activePersona = getCurrentPersonaSnapshot();
-                if (activePersona.id === personaId) {
+                selectedBindingThemeId = themeId;
+                const activeTheme = getCurrentThemeSnapshot();
+                if (activeTheme.id === themeId) {
                     currentData.activeUserSrc = userFrameSrc || null;
                     currentData.activeCharSrc = charFrameSrc || null;
-                    if (userFrameSrc) currentData.userSettings = normalizeBindingSettings(currentData.personaBindings[personaId].userSettings);
-                    if (charFrameSrc) currentData.charSettings = normalizeBindingSettings(currentData.personaBindings[personaId].charSettings);
+                    if (userFrameSrc) currentData.userSettings = normalizeBindingSettings(currentData.themeBindings[themeId].userSettings);
+                    if (charFrameSrc) currentData.charSettings = normalizeBindingSettings(currentData.themeBindings[themeId].charSettings);
                 }
                 await DataManager.save(currentData);
                 await applyInjectedCSS(currentData);
@@ -1429,13 +1555,13 @@
                 if (window.toastr) toastr.success('美化绑定已保存');
             });
             $popup.find('#afm-delete-binding').on('click', async function() {
-                const personaId = String($popup.find('#afm-binding-persona-id').val() || '').trim();
-                if (!personaId || !currentData.personaBindings[personaId]) return;
-                const ok = await showAFMConfirmDialog({ title: '删除美化绑定', message: `确定删除“${personaId}”的美化绑定吗？`, okText: '删除', danger: true });
+                const themeId = String($popup.find('#afm-binding-theme-id').val() || '').trim();
+                if (!themeId || !currentData.themeBindings[themeId]) return;
+                const ok = await showAFMConfirmDialog({ title: '删除美化绑定', message: `确定删除“${themeId}”的美化绑定吗？`, okText: '删除', danger: true });
                 if (!ok) return;
                 currentData = await DataManager.load();
-                delete currentData.personaBindings[personaId];
-                if (getCurrentPersonaSnapshot().id === personaId) {
+                delete currentData.themeBindings[themeId];
+                if (getCurrentThemeSnapshot().id === themeId) {
                     currentData.activeUserSrc = null;
                     currentData.activeCharSrc = null;
                 }
@@ -1443,7 +1569,7 @@
                 await applyInjectedCSS(currentData);
                 renderRoleGrid(getActiveRole());
                 renderSettings();
-                selectedBindingPersonaId = getCurrentPersonaSnapshot().id || '';
+                selectedBindingThemeId = getCurrentThemeSnapshot().id || '';
                 renderBindings();
                 if (window.toastr) toastr.success('美化绑定已删除');
             });
@@ -1451,14 +1577,14 @@
 
         await refreshGrids();
         bindBindingEvents();
-        personaBindingAppliedHandler = async () => {
+        themeBindingAppliedHandler = async () => {
             currentData = await DataManager.load();
             renderRoleGrid(getActiveRole());
             renderSettings();
-            selectedBindingPersonaId = getCurrentPersonaSnapshot().id || selectedBindingPersonaId;
+            selectedBindingThemeId = getCurrentThemeSnapshot().id || selectedBindingThemeId;
             renderBindings();
         };
-        window.addEventListener('afm-persona-binding-applied', personaBindingAppliedHandler);
+        window.addEventListener('afm-theme-binding-applied', themeBindingAppliedHandler);
 
         // 退出多选模式
         const exitMultiMode = () => {
@@ -1474,6 +1600,24 @@
 
         // 绑定设置页面的事件
         function bindSettingsEvents() {
+            $popup.find('#afm-check-update').on('click', async function() {
+                extensionUpdateState.phase = 'checking';
+                extensionUpdateState.message = '正在检查 GitHub 更新...';
+                extensionUpdateState.canUpdate = false;
+                renderSettings();
+                await checkExtensionUpdate();
+                renderSettings();
+            });
+
+            $popup.find('#afm-apply-update').on('click', async function() {
+                extensionUpdateState.phase = 'updating';
+                extensionUpdateState.message = '正在更新扩展...';
+                extensionUpdateState.canUpdate = false;
+                renderSettings();
+                await updateExtensionFromSettings();
+                if ($('.nsk-overlay').length) renderSettings();
+            });
+
             $popup.find('#opt-pseudo-target').on('change', async function() {
                 currentData.pseudoTarget = $(this).is(':checked') ? 'before' : 'after';
                 await DataManager.save(currentData);
@@ -1727,7 +1871,7 @@
                         const deletedSrc = list[idx].src;
                         if (isUser && currentData.activeUserSrc === deletedSrc) currentData.activeUserSrc = null;
                         if (!isUser && currentData.activeCharSrc === deletedSrc) currentData.activeCharSrc = null;
-                        clearFrameFromPersonaBindings(currentData, isUser ? 'user' : 'char', deletedSrc);
+                        clearFrameFromThemeBindings(currentData, isUser ? 'user' : 'char', deletedSrc);
                         list.splice(idx, 1);
                     }
                 });
@@ -1787,7 +1931,7 @@
                 const deletedSrc = list[index].src;
                 if (isUser && currentData.activeUserSrc === deletedSrc) { currentData.activeUserSrc = null; await applyInjectedCSS(); }
                 if (!isUser && currentData.activeCharSrc === deletedSrc) { currentData.activeCharSrc = null; await applyInjectedCSS(); }
-                clearFrameFromPersonaBindings(currentData, isUser ? 'user' : 'char', deletedSrc);
+                clearFrameFromThemeBindings(currentData, isUser ? 'user' : 'char', deletedSrc);
                 list.splice(index, 1);
                 await DataManager.save(currentData);
                 await refreshGrids();
@@ -1804,7 +1948,7 @@
                 userSettings: currentData.userSettings,
                 charSettings: currentData.charSettings,
                 pseudoTarget: currentData.pseudoTarget,
-                personaBindings: currentData.personaBindings
+                themeBindings: currentData.themeBindings
             };
             downloadJSON(exportData, 'Avatar_Frames_Backup.json');
         });
@@ -1860,7 +2004,7 @@
                 if (backup.userSettings) currentData.userSettings = { ...backup.userSettings };
                 if (backup.charSettings) currentData.charSettings = { ...backup.charSettings };
                 if (backup.pseudoTarget) currentData.pseudoTarget = backup.pseudoTarget;
-                if (backup.personaBindings) currentData.personaBindings = { ...currentData.personaBindings, ...normalizePersonaBindings(backup.personaBindings) };
+                if (backup.themeBindings) currentData.themeBindings = { ...currentData.themeBindings, ...normalizeThemeBindings(backup.themeBindings) };
                 await DataManager.save(currentData);
                 await refreshGrids();
                 await applyInjectedCSS();
@@ -1905,14 +2049,14 @@
                         if (json.userSettings) currentData.userSettings = { ...json.userSettings };
                         if (json.charSettings) currentData.charSettings = { ...json.charSettings };
                         if (json.pseudoTarget) currentData.pseudoTarget = json.pseudoTarget;
-                        if (json.personaBindings) currentData.personaBindings = { ...currentData.personaBindings, ...normalizePersonaBindings(json.personaBindings) };
+                        if (json.themeBindings) currentData.themeBindings = { ...currentData.themeBindings, ...normalizeThemeBindings(json.themeBindings) };
                     } 
                     else if (Array.isArray(json)) {
                         const isUser = $popup.find('#grid-user').hasClass('active');
                         const list = isUser ? currentData.userFrames : currentData.charFrames;
                         mergeList(list, json);
                     }
-                    if (addedCount > 0 || json.userSettings || json.personaBindings) {
+                    if (addedCount > 0 || json.userSettings || json.themeBindings) {
                         await DataManager.save(currentData);
                         await refreshGrids();
                         await applyInjectedCSS(); 
@@ -1937,11 +2081,11 @@
             if (ok) {
                 currentData = await DataManager.load();
                 if (isUser) {
-                    currentData.userFrames.forEach(frame => clearFrameFromPersonaBindings(currentData, 'user', frame.src));
+                    currentData.userFrames.forEach(frame => clearFrameFromThemeBindings(currentData, 'user', frame.src));
                     currentData.userFrames = [];
                     currentData.activeUserSrc = null;
                 } else {
-                    currentData.charFrames.forEach(frame => clearFrameFromPersonaBindings(currentData, 'char', frame.src));
+                    currentData.charFrames.forEach(frame => clearFrameFromThemeBindings(currentData, 'char', frame.src));
                     currentData.charFrames = [];
                     currentData.activeCharSrc = null;
                 }
@@ -2056,8 +2200,17 @@
         }
     }
     
-    setInterval(injectToExtensionsMenu, 2000);
+    if (window.__afmMenuWatcherTimer) clearInterval(window.__afmMenuWatcherTimer);
+    window.__afmMenuWatcherTimer = setInterval(injectToExtensionsMenu, 2000);
     setTimeout(injectToExtensionsMenu, 500);
-    installPersonaBindingWatcher();
+    installThemeBindingWatcher();
+    window.__afmHotCleanup = () => {
+        if (window.__afmMenuWatcherTimer) clearInterval(window.__afmMenuWatcherTimer);
+        if (window.__afmThemeBindingWatcherTimer) clearInterval(window.__afmThemeBindingWatcherTimer);
+        $('.nsk-overlay').remove();
+        $(`#${MENU_BTN_ID}`).remove();
+        $(`#${STYLE_ID}`).remove();
+        $(`#${APPLIED_STYLE_ID}`).remove();
+    };
 
 })();
