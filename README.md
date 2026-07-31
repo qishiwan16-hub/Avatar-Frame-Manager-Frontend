@@ -17,3 +17,5 @@
 ## 后端存储
 
 本扩展支持酒馆服务器插件 [`Avatar-Frame-Manager-Backend`](https://github.com/qishiwan16-hub/Avatar-Frame-Manager-Backend)。安装后端并开启 `enableServerPlugins` 后，扩展会自动检测 `/api/plugins/avatar-frame-manager`：头像框配置和绑定保存在服务器，图片按内容哈希去重；后端不可用时自动回退到浏览器 IndexedDB。首次检测到空后端时，会自动迁移现有本地数据。
+
+美化绑定使用当前账户 `data/<账户>/themes/*.json` 的文件名作为主题 ID，并与酒馆顶部 `#themes` 选择器保持一致。

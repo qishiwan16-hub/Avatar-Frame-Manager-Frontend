@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.3.3';
+    const SCRIPT_VERSION = '2.4.0';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -104,11 +104,13 @@
         const selectedId = $themeSelect.length ? String($themeSelect.val() || '').trim() : '';
         const selectedName = $themeSelect.length ? String($themeSelect.find('option:selected').text() || '').trim() : '';
         const themeId = String(
-            context.powerUserSettings?.theme || context.power_user?.theme || window.power_user?.theme || selectedId || ''
+            selectedId || context.powerUserSettings?.theme || context.power_user?.theme || window.power_user?.theme || ''
         ).trim();
         const themeName = String(selectedName || themeId).trim() || themeId;
         return { id: themeId, name: themeName };
     }
+
+    let themeFolderOptions = [];
 
     function getThemeOptions(data = null) {
         const options = new Map();
@@ -123,15 +125,7 @@
         $('#themes option').each(function() {
             addOption($(this).val(), $(this).text());
         });
-        const context = getSillyTavernContext();
-        const sources = [context.themes, context.theme_descriptions, window.themes, window.theme_descriptions];
-        sources.forEach(source => {
-            if (!source || typeof source !== 'object' || Array.isArray(source)) return;
-            Object.entries(source).forEach(([id, value]) => {
-                const name = value && typeof value === 'object' ? (value.name || value.title || id) : id;
-                addOption(id, name);
-            });
-        });
+        themeFolderOptions.forEach(option => addOption(option.id, option.name));
         if (data && data.themeBindings) Object.values(data.themeBindings).forEach(binding => addOption(binding.themeId, binding.themeName));
         return Array.from(options.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
     }
@@ -358,6 +352,21 @@
             return this._mode;
         }
     };
+
+    async function refreshThemeFolderOptions() {
+        if (DataManager.getStorageMode() !== 'server') return themeFolderOptions;
+        try {
+            const result = await requestBackend('/themes', { timeout: 5000 });
+            if (result && result.ok && Array.isArray(result.themes)) {
+                themeFolderOptions = result.themes
+                    .map(item => ({ id: String(item.id || '').trim(), name: String(item.name || item.id || '').trim() }))
+                    .filter(item => item.id);
+            }
+        } catch (error) {
+            console.warn('[头像框管理器] 读取酒馆美化文件夹失败', error);
+        }
+        return themeFolderOptions;
+    }
 
     function downloadJSON(data, filename) {
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -1391,6 +1400,7 @@
         let isMultiMode = false;
         let selectedIndices = new Set();
         let currentData = await DataManager.load();
+        await refreshThemeFolderOptions();
         const uiState = {
             user: { sort: 'order', group: 'all', search: '', page: 0 },
             char: { sort: 'order', group: 'all', search: '', page: 0 }
@@ -1726,6 +1736,7 @@
             });
             $popup.find('#afm-refresh-themes').on('click', async function() {
                 currentData = await DataManager.load();
+                await refreshThemeFolderOptions();
                 renderBindings();
             });
             $popup.find('.afm-binding-slider, .afm-binding-num-input').on('input', function() {
