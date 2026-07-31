@@ -17,6 +17,46 @@
     const DEFAULT_CONFIG = { top: -15, left: -15, width: 130, height: 130 };
     const DEFAULT_GROUP = '未分组';
 
+    function normalizeBindingSettings(settings) {
+        const source = settings && typeof settings === 'object' ? settings : {};
+        const normalized = { ...DEFAULT_CONFIG };
+        ['top', 'left', 'width', 'height'].forEach(key => {
+            const value = Number(source[key]);
+            if (Number.isFinite(value)) normalized[key] = value;
+        });
+        return normalized;
+    }
+
+    function normalizePersonaBindings(bindings) {
+        if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) return {};
+        const normalized = {};
+        Object.entries(bindings).forEach(([rawId, rawBinding]) => {
+            const binding = rawBinding && typeof rawBinding === 'object' ? rawBinding : {};
+            const personaId = String(binding.personaId || rawId || '').trim();
+            if (!personaId) return;
+            normalized[personaId] = {
+                personaId,
+                personaName: String(binding.personaName || personaId).trim() || personaId,
+                userFrameSrc: String(binding.userFrameSrc || binding.frameSrc || binding.src || '').trim(),
+                charFrameSrc: String(binding.charFrameSrc || '').trim(),
+                userSettings: normalizeBindingSettings(binding.userSettings || binding.settings),
+                charSettings: normalizeBindingSettings(binding.charSettings),
+                updatedAt: Number(binding.updatedAt) || Date.now()
+            };
+        });
+        return normalized;
+    }
+
+    function clearFrameFromPersonaBindings(data, role, frameSrc) {
+        if (!data || !data.personaBindings || !frameSrc) return;
+        const key = role === 'char' ? 'charFrameSrc' : 'userFrameSrc';
+        Object.keys(data.personaBindings).forEach(personaId => {
+            const binding = data.personaBindings[personaId];
+            if (binding[key] === frameSrc) binding[key] = '';
+            if (!binding.userFrameSrc && !binding.charFrameSrc) delete data.personaBindings[personaId];
+        });
+    }
+
     function normalizeFrameList(list) {
         const now = Date.now();
         if (!Array.isArray(list)) return [];
@@ -40,7 +80,69 @@
         if (!data.userSettings) data.userSettings = { ...DEFAULT_CONFIG };
         if (!data.charSettings) data.charSettings = { ...DEFAULT_CONFIG };
         if (!data.pseudoTarget) data.pseudoTarget = 'after';
+        data.userSettings = normalizeBindingSettings(data.userSettings);
+        data.charSettings = normalizeBindingSettings(data.charSettings);
+        data.personaBindings = normalizePersonaBindings(data.personaBindings);
         return data;
+    }
+
+    function getSillyTavernContext() {
+        try {
+            if (typeof getContext === 'function') return getContext() || {};
+        } catch (error) {}
+        try {
+            if (window.SillyTavern && typeof window.SillyTavern.getContext === 'function') return window.SillyTavern.getContext() || {};
+        } catch (error) {}
+        return {};
+    }
+
+    function getCurrentPersonaSnapshot() {
+        const context = getSillyTavernContext();
+        const $personaSelect = $('#persona-management, #persona_management, select[name*="persona"], select[id*="persona"]').filter(':visible').first();
+        const $personaCard = $('.persona_block.selected, .persona_block.active, [data-persona-id].selected, [data-persona-id].active').first();
+        const selectedId = $personaSelect.length ? String($personaSelect.val() || '').trim() : '';
+        const selectedName = $personaSelect.length ? String($personaSelect.find('option:selected').text() || '').trim() : '';
+        const cardId = $personaCard.length ? String($personaCard.attr('data-persona-id') || $personaCard.attr('data-avatar-id') || $personaCard.attr('imgfile') || '').trim() : '';
+        const cardName = $personaCard.length ? String($personaCard.attr('title') || $personaCard.find('.persona_name, .ch_name').first().text() || '').trim() : '';
+        const personaId = String(
+            context.personaId || context.currentPersonaId || context.user_avatar ||
+            window.currentPersonaId || window.user_avatar || cardId || selectedId || ''
+        ).trim();
+        const personaName = String(
+            context.personaName || context.currentPersonaName || context.name1 || cardName || selectedName || personaId
+        ).trim() || personaId;
+        return { id: personaId, name: personaName };
+    }
+
+    function getPersonaOptions(data = null) {
+        const options = new Map();
+        const addOption = (id, name = id) => {
+            const personaId = String(id || '').trim();
+            if (!personaId || personaId === 'none' || personaId === 'null') return;
+            const personaName = String(name || personaId).trim() || personaId;
+            if (!options.has(personaId) || options.get(personaId).name === personaId) options.set(personaId, { id: personaId, name: personaName });
+        };
+        const current = getCurrentPersonaSnapshot();
+        addOption(current.id, current.name);
+        $('#persona-management option, #persona_management option, select[name*="persona"] option, select[id*="persona"] option').each(function() {
+            addOption($(this).val(), $(this).text());
+        });
+        $('.persona_block, [data-persona-id], [data-avatar-id]').each(function() {
+            const id = $(this).attr('data-persona-id') || $(this).attr('data-avatar-id') || $(this).attr('imgfile');
+            const name = $(this).attr('title') || $(this).find('.persona_name, .ch_name').first().text() || id;
+            addOption(id, name);
+        });
+        const context = getSillyTavernContext();
+        const sources = [context.personas, context.persona_descriptions, window.personas, window.persona_descriptions];
+        sources.forEach(source => {
+            if (!source || typeof source !== 'object' || Array.isArray(source)) return;
+            Object.entries(source).forEach(([id, value]) => {
+                const name = value && typeof value === 'object' ? (value.name || value.title || id) : id;
+                addOption(id, name);
+            });
+        });
+        if (data && data.personaBindings) Object.values(data.personaBindings).forEach(binding => addOption(binding.personaId, binding.personaName));
+        return Array.from(options.values()).sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
     }
 
     function getFrameNameFromFile(file, fallbackIndex) {
@@ -278,13 +380,15 @@
             activeCharSrc: isCharScope ? normalized.activeCharSrc : null,
             userSettings: isUserScope ? normalized.userSettings : null,
             charSettings: isCharScope ? normalized.charSettings : null,
-            pseudoTarget: normalized.pseudoTarget
+            pseudoTarget: normalized.pseudoTarget,
+            personaBindings: normalized.personaBindings
         };
         const settingsBackup = {
             pseudoTarget: backup.pseudoTarget
         };
         if (backup.userSettings) settingsBackup.userSettings = backup.userSettings;
         if (backup.charSettings) settingsBackup.charSettings = backup.charSettings;
+        settingsBackup.personaBindings = backup.personaBindings;
         const entries = [
             { name: 'avatar-frame-backup.json', data: JSON.stringify(backup, null, 2) },
             { name: 'config/avatar-frame-settings.json', data: JSON.stringify(settingsBackup, null, 2) }
@@ -352,6 +456,55 @@
         }
 
         if (css) $('head').append(`<style id="${APPLIED_STYLE_ID}">${css}</style>`);
+    }
+
+    let lastPersonaBindingId = null;
+    let personaBindingSyncPromise = Promise.resolve();
+
+    function bindingSettingsEqual(left, right) {
+        const a = normalizeBindingSettings(left);
+        const b = normalizeBindingSettings(right);
+        return ['top', 'left', 'width', 'height'].every(key => Number(a[key]) === Number(b[key]));
+    }
+
+    async function syncPersonaBinding(force = false) {
+        const persona = getCurrentPersonaSnapshot();
+        if (!persona.id || (!force && persona.id === lastPersonaBindingId)) return;
+        lastPersonaBindingId = persona.id;
+        personaBindingSyncPromise = personaBindingSyncPromise.then(async () => {
+            const data = await DataManager.load();
+            const binding = data.personaBindings[persona.id];
+            const userFrameExists = binding && binding.userFrameSrc && data.userFrames.some(frame => frame.src === binding.userFrameSrc);
+            const charFrameExists = binding && binding.charFrameSrc && data.charFrames.some(frame => frame.src === binding.charFrameSrc);
+            const nextUserFrameSrc = userFrameExists ? binding.userFrameSrc : null;
+            const nextCharFrameSrc = charFrameExists ? binding.charFrameSrc : null;
+            const nextUserSettings = userFrameExists ? normalizeBindingSettings(binding.userSettings) : data.userSettings;
+            const nextCharSettings = charFrameExists ? normalizeBindingSettings(binding.charSettings) : data.charSettings;
+            const changed = data.activeUserSrc !== nextUserFrameSrc || data.activeCharSrc !== nextCharFrameSrc ||
+                (userFrameExists && !bindingSettingsEqual(data.userSettings, nextUserSettings)) ||
+                (charFrameExists && !bindingSettingsEqual(data.charSettings, nextCharSettings));
+            if (changed) {
+                data.activeUserSrc = nextUserFrameSrc;
+                data.activeCharSrc = nextCharFrameSrc;
+                if (userFrameExists) data.userSettings = nextUserSettings;
+                if (charFrameExists) data.charSettings = nextCharSettings;
+                await DataManager.save(data);
+            }
+            await applyInjectedCSS(data);
+            if (typeof window.CustomEvent === 'function') window.dispatchEvent(new CustomEvent('afm-persona-binding-applied', { detail: persona }));
+        }).catch(error => console.warn('[头像框管理器] 美化绑定同步失败', error));
+        return personaBindingSyncPromise;
+    }
+
+    function installPersonaBindingWatcher() {
+        if (window.__afmPersonaBindingWatcherTimer) clearInterval(window.__afmPersonaBindingWatcherTimer);
+        window.__afmPersonaBindingWatcherTimer = setInterval(() => syncPersonaBinding(false), 1200);
+        const context = getSillyTavernContext();
+        const source = context.eventSource || window.eventSource;
+        const types = context.event_types || window.event_types || {};
+        const eventNames = Array.from(new Set([types.PERSONA_CHANGED, 'persona_changed', 'personaChanged'].filter(Boolean)));
+        if (source && typeof source.on === 'function') eventNames.forEach(name => source.on(name, () => syncPersonaBinding(true)));
+        syncPersonaBinding(true);
     }
     
     await applyInjectedCSS();
@@ -596,6 +749,31 @@
             .afm-checkbox-wrapper { display: flex; align-items: center; gap: 10px; font-size: 0.95em; opacity: 0.9; }
             .afm-checkbox-input { width: 18px; height: 18px; accent-color: var(--SmartThemeQuoteColor); cursor: pointer; }
 
+            .afm-binding-current { padding: 10px 12px; margin-bottom: 12px; border-left: 3px solid var(--SmartThemeQuoteColor); background: rgba(0,0,0,0.04); font-size: 0.86em; line-height: 1.45; }
+            .afm-binding-current strong { display: block; font-size: 1.05em; }
+            .afm-binding-current code { display: block; margin-top: 2px; opacity: 0.62; overflow-wrap: anywhere; }
+            .afm-binding-field { margin-bottom: 12px; }
+            .afm-binding-field-label { display: block; margin-bottom: 5px; font-size: 0.82em; opacity: 0.7; }
+            .afm-binding-select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; border: 1px solid rgba(0,0,0,0.12); border-radius: 8px; background: rgba(255,255,255,0.72); color: inherit; }
+            .afm-binding-slider { flex: 1; margin: 0 10px !important; cursor: pointer; accent-color: var(--SmartThemeQuoteColor); }
+            .afm-binding-num-input { width: 50px; text-align: center; border: 1px solid rgba(0,0,0,0.1); border-radius: 8px; padding: 4px; font-size: 0.9em; background: rgba(255,255,255,0.8); color: inherit; }
+            .afm-binding-actions { display: flex; gap: 8px; margin-top: 14px; }
+            .afm-binding-action { min-height: 34px; padding: 7px 13px; border: 1px solid rgba(0,0,0,0.12); border-radius: 8px; background: rgba(255,255,255,0.62); color: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+            .afm-binding-action.primary { flex: 1; border-color: var(--SmartThemeQuoteColor); background: var(--SmartThemeQuoteColor); color: white; }
+            .afm-binding-action.danger { color: #d65353; }
+            .afm-binding-action:disabled { opacity: 0.4; cursor: default; }
+            .afm-binding-list { display: flex; flex-direction: column; gap: 7px; }
+            .afm-binding-item { display: grid; grid-template-columns: 42px 42px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 8px; border: 1px solid rgba(0,0,0,0.08); border-radius: 8px; background: rgba(255,255,255,0.35); cursor: pointer; }
+            .afm-binding-item.active { border-color: var(--SmartThemeQuoteColor); box-shadow: inset 3px 0 0 var(--SmartThemeQuoteColor); }
+            .afm-binding-thumb { width: 42px; height: 42px; object-fit: contain; display: block; background: rgba(0,0,0,0.05); border-radius: 6px; }
+            .afm-binding-thumb-empty { width: 42px; height: 42px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.05); border-radius: 6px; opacity: 0.42; font-size: 0.7em; }
+            .afm-binding-info { min-width: 0; }
+            .afm-binding-name { font-size: 0.9em; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .afm-binding-meta { margin-top: 2px; font-size: 0.74em; opacity: 0.62; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .afm-binding-edit { width: 30px; height: 30px; border: 0; background: transparent; color: inherit; opacity: 0.62; cursor: pointer; }
+            .afm-binding-empty { padding: 20px 8px; text-align: center; opacity: 0.55; font-size: 0.86em; }
+            .afm-binding-settings-title { margin: 13px 0 8px; font-size: 0.82em; font-weight: 600; opacity: 0.72; }
+
             @media (max-width: 600px) {
                 .nsk-box { width: min(96vw, 500px); height: min(86dvh, 800px); max-height: calc(100dvh - 20px); }
                 .afm-card { padding: 5px; }
@@ -621,6 +799,10 @@
                 .afm-bottom-group .afm-btn-lg, .afm-bottom-group .afm-btn-sm { flex: 0 0 auto; min-width: max-content; height: 36px; min-height: 36px; padding: 0 11px; border-radius: 14px; font-size: 0.8em; line-height: 1; gap: 5px; white-space: nowrap; flex-direction: row; }
                 .afm-bottom-group .afm-btn-lg i, .afm-bottom-group .afm-btn-sm i { flex: 0 0 auto; font-size: 0.95em; line-height: 1; }
                 .afm-select-all-btn, .afm-export-multi-btn, .afm-group-multi-btn, .afm-delete-multi-btn, .afm-cancel-multi-btn { max-width: none; writing-mode: horizontal-tb; text-orientation: mixed; }
+                .afm-binding-actions { flex-wrap: wrap; }
+                .afm-binding-action.primary { flex-basis: 100%; }
+                .afm-binding-item { grid-template-columns: 36px 36px minmax(0, 1fr) auto; gap: 6px; }
+                .afm-binding-thumb, .afm-binding-thumb-empty { width: 36px; height: 36px; }
             }
         </style>
     `);
@@ -629,7 +811,7 @@
     // 4. UI 模板生成函数
     // ===========================
     function escapeHTML(str) {
-        return String(str || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"');
+        return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function getStarIconHTML() {
@@ -759,6 +941,89 @@
         `;
     }
 
+    function createBindingsHTML(data, selectedPersonaId = null) {
+        const currentPersona = getCurrentPersonaSnapshot();
+        const options = getPersonaOptions(data);
+        const bindings = Object.values(data.personaBindings || {}).sort((a, b) => a.personaName.localeCompare(b.personaName, 'zh-Hans-CN'));
+        const selectedId = String(selectedPersonaId || currentPersona.id || options[0]?.id || bindings[0]?.personaId || '').trim();
+        const selectedBinding = data.personaBindings[selectedId] || null;
+        const userSettings = selectedBinding ? selectedBinding.userSettings : data.userSettings;
+        const charSettings = selectedBinding ? selectedBinding.charSettings : data.charSettings;
+        const selectedUserFrame = selectedBinding ? selectedBinding.userFrameSrc : '';
+        const selectedCharFrame = selectedBinding ? selectedBinding.charFrameSrc : '';
+        const createFrameOptions = (frames, selectedSrc) => [
+            '<option value="">不绑定（切换时清除）</option>',
+            ...(frames || []).map(frame => `<option value="${escapeHTML(frame.src)}" ${frame.src === selectedSrc ? 'selected' : ''}>${escapeHTML(frame.name || '未命名头像框')}</option>`)
+        ].join('');
+        const createBindingSlider = (label, key, value, group) => `
+            <div class="afm-control-row">
+                <div class="afm-control-label">${label}</div>
+                <input type="range" class="afm-binding-slider" data-binding-group="${group}" data-key="${key}" value="${value}" min="${key === 'width' || key === 'height' ? 0 : -100}" max="${key === 'width' || key === 'height' ? 300 : 200}">
+                <input type="number" class="afm-binding-num-input" data-binding-group="${group}" data-key="${key}" value="${value}">
+            </div>
+        `;
+        const renderThumb = (src, role) => src ? `<img class="afm-binding-thumb" src="${escapeHTML(src)}" alt="${role}">` : `<div class="afm-binding-thumb-empty">${role}</div>`;
+        const bindingItems = bindings.length ? bindings.map(binding => `
+            <div class="afm-binding-item ${binding.personaId === selectedId ? 'active' : ''}" data-persona-id="${escapeHTML(binding.personaId)}">
+                ${renderThumb(binding.userFrameSrc, 'User')}
+                ${renderThumb(binding.charFrameSrc, 'Char')}
+                <div class="afm-binding-info">
+                    <div class="afm-binding-name">${escapeHTML(binding.personaName)}</div>
+                    <div class="afm-binding-meta">${escapeHTML(binding.personaId)}</div>
+                </div>
+                <button class="afm-binding-edit" type="button" title="编辑绑定"><i class="fa-solid fa-pen"></i></button>
+            </div>
+        `).join('') : '<div class="afm-binding-empty">还没有美化绑定</div>';
+
+        return `
+            <div class="afm-settings-container">
+                <div class="afm-setting-group">
+                    <div class="afm-setting-header">
+                        <span><i class="fa-solid fa-link"></i> 美化绑定</span>
+                        <button class="afm-binding-action" id="afm-refresh-personas" type="button" title="刷新美化列表"><i class="fa-solid fa-arrows-rotate"></i></button>
+                    </div>
+                    <div class="afm-binding-current"><strong>当前美化：${escapeHTML(currentPersona.name || '未检测到')}</strong><code>${escapeHTML(currentPersona.id || '未检测到美化标识')}</code></div>
+                    <div class="afm-binding-field">
+                        <label class="afm-binding-field-label" for="afm-binding-persona-select">选择美化</label>
+                        <select id="afm-binding-persona-select" class="afm-binding-select">
+                            ${options.length ? options.map(option => `<option value="${escapeHTML(option.id)}" ${option.id === selectedId ? 'selected' : ''}>${escapeHTML(option.name)} · ${escapeHTML(option.id)}</option>`).join('') : '<option value="">未检测到美化</option>'}
+                        </select>
+                    </div>
+                    <div class="afm-binding-field">
+                        <label class="afm-binding-field-label" for="afm-binding-persona-id">美化标识</label>
+                        <input id="afm-binding-persona-id" class="afm-binding-select" type="text" value="${escapeHTML(selectedId)}" placeholder="输入美化 ID">
+                    </div>
+                    <div class="afm-binding-field">
+                        <label class="afm-binding-field-label" for="afm-binding-user-frame">User 头像框</label>
+                        <select id="afm-binding-user-frame" class="afm-binding-select">${createFrameOptions(data.userFrames, selectedUserFrame)}</select>
+                    </div>
+                    <div class="afm-binding-field">
+                        <label class="afm-binding-field-label" for="afm-binding-char-frame">Char 头像框</label>
+                        <select id="afm-binding-char-frame" class="afm-binding-select">${createFrameOptions(data.charFrames, selectedCharFrame)}</select>
+                    </div>
+                    <div class="afm-binding-settings-title">User 定位数值 (%)</div>
+                    ${createBindingSlider('Top', 'top', userSettings.top, 'user')}
+                    ${createBindingSlider('Left', 'left', userSettings.left, 'user')}
+                    ${createBindingSlider('宽', 'width', userSettings.width, 'user')}
+                    ${createBindingSlider('高', 'height', userSettings.height, 'user')}
+                    <div class="afm-binding-settings-title">Char 定位数值 (%)</div>
+                    ${createBindingSlider('Top', 'top', charSettings.top, 'char')}
+                    ${createBindingSlider('Left', 'left', charSettings.left, 'char')}
+                    ${createBindingSlider('宽', 'width', charSettings.width, 'char')}
+                    ${createBindingSlider('高', 'height', charSettings.height, 'char')}
+                    <div class="afm-binding-actions">
+                        <button class="afm-binding-action primary" id="afm-save-binding" type="button"><i class="fa-solid fa-floppy-disk"></i> 保存绑定</button>
+                        <button class="afm-binding-action danger" id="afm-delete-binding" type="button" ${selectedBinding ? '' : 'disabled'}><i class="fa-solid fa-trash-can"></i> 删除</button>
+                    </div>
+                </div>
+                <div class="afm-setting-group">
+                    <div class="afm-setting-header"><span><i class="fa-solid fa-list"></i> 已保存绑定</span></div>
+                    <div class="afm-binding-list">${bindingItems}</div>
+                </div>
+            </div>
+        `;
+    }
+
     // ===========================
     // 5. 弹窗主逻辑 
     // ===========================
@@ -784,6 +1049,7 @@
 
                     <div class="nsk-tabs">
                         <div class="nsk-tab active" data-target="view-frames"><i class="fa-solid fa-image"></i> 列表</div>
+                        <div class="nsk-tab" data-target="view-bindings"><i class="fa-solid fa-link"></i> 绑定</div>
                         <div class="nsk-tab" data-target="view-settings"><i class="fa-solid fa-sliders"></i> 设置</div>
                     </div>
 
@@ -841,6 +1107,9 @@
                         <div class="nsk-panel" id="view-settings">
                             ${createSettingsHTML(currentData)}
                         </div>
+                        <div class="nsk-panel" id="view-bindings">
+                            ${createBindingsHTML(currentData)}
+                        </div>
                     </div>
 
                 </div>
@@ -849,6 +1118,8 @@
 
         const $popup = $(popupHTML);
         $('body').append($popup);
+        let selectedBindingPersonaId = getCurrentPersonaSnapshot().id || '';
+        let personaBindingAppliedHandler = null;
 
         const showAFMChoiceDialog = ({ title, message, details = [], options = [] }) => new Promise(resolve => {
             const detailHTML = details.length ? `<div class="afm-modal-details">${details.map(item => `<div>${escapeHTML(item)}</div>`).join('')}</div>` : '';
@@ -998,7 +1269,10 @@
         });
 
         // --- 绑定关闭逻辑 ---
-        const closePopup = () => $popup.fadeOut(200, () => $popup.remove());
+        const closePopup = () => {
+            if (personaBindingAppliedHandler) window.removeEventListener('afm-persona-binding-applied', personaBindingAppliedHandler);
+            $popup.fadeOut(200, () => $popup.remove());
+        };
         $popup.find('.nsk-close').on('click', closePopup);
         $popup.on('click', (e) => { if ($(e.target).hasClass('nsk-overlay')) closePopup(); });
 
@@ -1072,7 +1346,117 @@
             bindSettingsEvents(); 
         };
 
+        const renderBindings = () => {
+            $popup.find('#view-bindings').html(createBindingsHTML(currentData, selectedBindingPersonaId));
+            bindBindingEvents();
+        };
+
+        function readBindingSettings(group) {
+            const settings = { ...DEFAULT_CONFIG };
+            ['top', 'left', 'width', 'height'].forEach(key => {
+                const raw = $popup.find(`.afm-binding-num-input[data-binding-group="${group}"][data-key="${key}"]`).val();
+                const value = Number(raw);
+                if (Number.isFinite(value)) settings[key] = value;
+            });
+            return settings;
+        }
+
+        function bindBindingEvents() {
+            $popup.find('#afm-binding-persona-select').on('change', function() {
+                selectedBindingPersonaId = String($(this).val() || '').trim();
+                renderBindings();
+            });
+            $popup.find('#afm-refresh-personas').on('click', async function() {
+                currentData = await DataManager.load();
+                renderBindings();
+            });
+            $popup.find('.afm-binding-slider, .afm-binding-num-input').on('input', function() {
+                const group = $(this).data('binding-group');
+                const key = $(this).data('key');
+                const value = Number($(this).val());
+                if (!Number.isFinite(value)) return;
+                $popup.find(`.afm-binding-slider[data-binding-group="${group}"][data-key="${key}"], .afm-binding-num-input[data-binding-group="${group}"][data-key="${key}"]`).not(this).val(value);
+            });
+            $popup.find('.afm-binding-item').on('click', function(e) {
+                if ($(e.target).closest('.afm-binding-edit').length) return;
+                selectedBindingPersonaId = String($(this).data('persona-id') || '').trim();
+                renderBindings();
+            });
+            $popup.find('.afm-binding-edit').on('click', function(e) {
+                e.stopPropagation();
+                selectedBindingPersonaId = String($(this).closest('.afm-binding-item').data('persona-id') || '').trim();
+                renderBindings();
+            });
+            $popup.find('#afm-save-binding').on('click', async function() {
+                const personaId = String($popup.find('#afm-binding-persona-id').val() || '').trim();
+                const selectedOptionId = String($popup.find('#afm-binding-persona-select').val() || '').trim();
+                const personaName = selectedOptionId === personaId ? String($popup.find('#afm-binding-persona-select option:selected').text() || personaId).split(' · ')[0].trim() : personaId;
+                const userFrameSrc = String($popup.find('#afm-binding-user-frame').val() || '').trim();
+                const charFrameSrc = String($popup.find('#afm-binding-char-frame').val() || '').trim();
+                if (!personaId) {
+                    if (window.toastr) toastr.warning('请先选择或输入美化标识');
+                    return;
+                }
+                if (!userFrameSrc && !charFrameSrc) {
+                    if (window.toastr) toastr.warning('User 或 Char 至少选择一个头像框');
+                    return;
+                }
+                currentData = await DataManager.load();
+                currentData.personaBindings[personaId] = {
+                    personaId,
+                    personaName,
+                    userFrameSrc,
+                    charFrameSrc,
+                    userSettings: readBindingSettings('user'),
+                    charSettings: readBindingSettings('char'),
+                    updatedAt: Date.now()
+                };
+                selectedBindingPersonaId = personaId;
+                const activePersona = getCurrentPersonaSnapshot();
+                if (activePersona.id === personaId) {
+                    currentData.activeUserSrc = userFrameSrc || null;
+                    currentData.activeCharSrc = charFrameSrc || null;
+                    if (userFrameSrc) currentData.userSettings = normalizeBindingSettings(currentData.personaBindings[personaId].userSettings);
+                    if (charFrameSrc) currentData.charSettings = normalizeBindingSettings(currentData.personaBindings[personaId].charSettings);
+                }
+                await DataManager.save(currentData);
+                await applyInjectedCSS(currentData);
+                renderRoleGrid(getActiveRole());
+                renderSettings();
+                renderBindings();
+                if (window.toastr) toastr.success('美化绑定已保存');
+            });
+            $popup.find('#afm-delete-binding').on('click', async function() {
+                const personaId = String($popup.find('#afm-binding-persona-id').val() || '').trim();
+                if (!personaId || !currentData.personaBindings[personaId]) return;
+                const ok = await showAFMConfirmDialog({ title: '删除美化绑定', message: `确定删除“${personaId}”的美化绑定吗？`, okText: '删除', danger: true });
+                if (!ok) return;
+                currentData = await DataManager.load();
+                delete currentData.personaBindings[personaId];
+                if (getCurrentPersonaSnapshot().id === personaId) {
+                    currentData.activeUserSrc = null;
+                    currentData.activeCharSrc = null;
+                }
+                await DataManager.save(currentData);
+                await applyInjectedCSS(currentData);
+                renderRoleGrid(getActiveRole());
+                renderSettings();
+                selectedBindingPersonaId = getCurrentPersonaSnapshot().id || '';
+                renderBindings();
+                if (window.toastr) toastr.success('美化绑定已删除');
+            });
+        }
+
         await refreshGrids();
+        bindBindingEvents();
+        personaBindingAppliedHandler = async () => {
+            currentData = await DataManager.load();
+            renderRoleGrid(getActiveRole());
+            renderSettings();
+            selectedBindingPersonaId = getCurrentPersonaSnapshot().id || selectedBindingPersonaId;
+            renderBindings();
+        };
+        window.addEventListener('afm-persona-binding-applied', personaBindingAppliedHandler);
 
         // 退出多选模式
         const exitMultiMode = () => {
@@ -1341,6 +1725,7 @@
                         const deletedSrc = list[idx].src;
                         if (isUser && currentData.activeUserSrc === deletedSrc) currentData.activeUserSrc = null;
                         if (!isUser && currentData.activeCharSrc === deletedSrc) currentData.activeCharSrc = null;
+                        clearFrameFromPersonaBindings(currentData, isUser ? 'user' : 'char', deletedSrc);
                         list.splice(idx, 1);
                     }
                 });
@@ -1348,6 +1733,7 @@
                 await applyInjectedCSS();
                 exitMultiMode();
                 await refreshGrids();
+                renderBindings();
                 if (window.toastr) toastr.success(`成功删除 ${indicesArray.length} 个头像框`);
             }
         });
@@ -1399,9 +1785,11 @@
                 const deletedSrc = list[index].src;
                 if (isUser && currentData.activeUserSrc === deletedSrc) { currentData.activeUserSrc = null; await applyInjectedCSS(); }
                 if (!isUser && currentData.activeCharSrc === deletedSrc) { currentData.activeCharSrc = null; await applyInjectedCSS(); }
+                clearFrameFromPersonaBindings(currentData, isUser ? 'user' : 'char', deletedSrc);
                 list.splice(index, 1);
                 await DataManager.save(currentData);
-                await refreshGrids(); 
+                await refreshGrids();
+                renderBindings();
             }
         });
 
@@ -1413,7 +1801,8 @@
                 charFrames: currentData.charFrames,
                 userSettings: currentData.userSettings,
                 charSettings: currentData.charSettings,
-                pseudoTarget: currentData.pseudoTarget
+                pseudoTarget: currentData.pseudoTarget,
+                personaBindings: currentData.personaBindings
             };
             downloadJSON(exportData, 'Avatar_Frames_Backup.json');
         });
@@ -1469,10 +1858,12 @@
                 if (backup.userSettings) currentData.userSettings = { ...backup.userSettings };
                 if (backup.charSettings) currentData.charSettings = { ...backup.charSettings };
                 if (backup.pseudoTarget) currentData.pseudoTarget = backup.pseudoTarget;
+                if (backup.personaBindings) currentData.personaBindings = { ...currentData.personaBindings, ...normalizePersonaBindings(backup.personaBindings) };
                 await DataManager.save(currentData);
                 await refreshGrids();
                 await applyInjectedCSS();
                 renderSettings();
+                renderBindings();
                 if (window.toastr) toastr.success(`ZIP 备份导入完成，新增 ${added} 个头像框，并已恢复配置`);
             } catch (err) {
                 if (window.toastr) toastr.error('ZIP 导入失败: ' + err.message);
@@ -1512,17 +1903,19 @@
                         if (json.userSettings) currentData.userSettings = { ...json.userSettings };
                         if (json.charSettings) currentData.charSettings = { ...json.charSettings };
                         if (json.pseudoTarget) currentData.pseudoTarget = json.pseudoTarget;
+                        if (json.personaBindings) currentData.personaBindings = { ...currentData.personaBindings, ...normalizePersonaBindings(json.personaBindings) };
                     } 
                     else if (Array.isArray(json)) {
                         const isUser = $popup.find('#grid-user').hasClass('active');
                         const list = isUser ? currentData.userFrames : currentData.charFrames;
                         mergeList(list, json);
                     }
-                    if (addedCount > 0 || json.userSettings) { 
+                    if (addedCount > 0 || json.userSettings || json.personaBindings) {
                         await DataManager.save(currentData);
                         await refreshGrids();
                         await applyInjectedCSS(); 
                         renderSettings(); 
+                        renderBindings();
                         if (window.toastr) toastr.success(`导入成功，新增 ${addedCount} 个`);
                     } else {
                         if (window.toastr) toastr.warning("未发现新数据");
@@ -1541,11 +1934,19 @@
             const ok = await showAFMConfirmDialog({ title: `清空 ${roleName} 列表`, message: `确定要清空 ${roleName} 列表下的所有头像框吗？此操作不可恢复！`, okText: '清空', danger: true });
             if (ok) {
                 currentData = await DataManager.load();
-                if (isUser) { currentData.userFrames = []; currentData.activeUserSrc = null; } 
-                else { currentData.charFrames = []; currentData.activeCharSrc = null; }
+                if (isUser) {
+                    currentData.userFrames.forEach(frame => clearFrameFromPersonaBindings(currentData, 'user', frame.src));
+                    currentData.userFrames = [];
+                    currentData.activeUserSrc = null;
+                } else {
+                    currentData.charFrames.forEach(frame => clearFrameFromPersonaBindings(currentData, 'char', frame.src));
+                    currentData.charFrames = [];
+                    currentData.activeCharSrc = null;
+                }
                 await DataManager.save(currentData);
                 await applyInjectedCSS();
                 await refreshGrids();
+                renderBindings();
                 if (isMultiMode) exitMultiMode();
                 if (window.toastr) toastr.success("列表已清空");
             }
@@ -1655,5 +2056,6 @@
     
     setInterval(injectToExtensionsMenu, 2000);
     setTimeout(injectToExtensionsMenu, 500);
+    installPersonaBindingWatcher();
 
 })();
