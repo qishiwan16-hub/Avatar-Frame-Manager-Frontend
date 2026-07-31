@@ -1,5 +1,7 @@
 # 头像框管理器
 
+本插件为二次修改版本，原版作者：毛毛雨。
+
 这是一个标准酒馆扩展目录，可通过 GitHub 安装。
 
 仓库地址：<https://github.com/qishiwan16-hub/Avatar-Frame-Manager-Frontend>
