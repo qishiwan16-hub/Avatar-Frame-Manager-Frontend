@@ -1,0 +1,11 @@
+{
+  "display_name": "头像框管理器",
+  "loading_order": 10,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "author": "毛毛雨Rain、祀骨祈Meoroll",
+  "version": "2.0.0",
+  "description": "头像框管理器酒馆扩展",
+  "homePage": "https://github.com/qishiwan16-hub/Avatar-Frame-Manager-Frontend"
+}
