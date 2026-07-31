@@ -6,6 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
+    const SCRIPT_VERSION = '2.1.1';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -541,6 +542,7 @@
                 padding: 15px; border-bottom: 1px solid rgba(0,0,0,0.05); flex-shrink: 0;
             }
             .nsk-title { font-weight: bold; font-size: 1.1em; display: flex; align-items: center; gap: 8px; }
+            .nsk-version { font-size: 0.68em; line-height: 1; font-weight: 600; opacity: 0.58; padding: 4px 6px; border: 1px solid currentColor; border-radius: 6px; }
             .nsk-close {
                 cursor: pointer; background: none; border: none; padding: 0; opacity: 0.5; font-size: 1.4em;
                 display: flex; align-items: center; justify-content: center; width: 32px; height: 32px;
@@ -1043,7 +1045,7 @@
                 <div class="nsk-box">
                     
                     <div class="nsk-header">
-                        <div class="nsk-title"><i class="fa-solid fa-crop-simple"></i> ${SCRIPT_NAME}</div>
+                        <div class="nsk-title"><i class="fa-solid fa-crop-simple"></i> ${SCRIPT_NAME}<span class="nsk-version">v${SCRIPT_VERSION}</span></div>
                         <button class="nsk-close"><i class="fa-solid fa-xmark"></i></button>
                     </div>
 
