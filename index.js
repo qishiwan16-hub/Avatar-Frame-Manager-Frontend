@@ -6,11 +6,12 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.4.0';
+    const SCRIPT_VERSION = '2.5.0';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
     const INITIAL_SCRIPT_URL = document.currentScript && document.currentScript.src || '';
+    const DARK_MODE_STORAGE_KEY = 'ST_AFM_DarkMode';
     
     // 数据库配置
     const DB_NAME = 'ST_AvatarFrameDB';
@@ -881,12 +882,71 @@
             }
             .nsk-title { font-weight: bold; font-size: 1.1em; display: flex; align-items: center; gap: 8px; }
             .nsk-version { font-size: 0.68em; line-height: 1; font-weight: 600; opacity: 0.58; padding: 4px 6px; border: 1px solid currentColor; border-radius: 6px; }
+            .nsk-header-actions { display: flex; align-items: center; gap: 5px; }
+            .nsk-theme-toggle {
+                cursor: pointer; background: none; border: none; padding: 0; opacity: 0.55; font-size: 1.25em;
+                display: flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+                transition: 0.2s; border-radius: 50%; color: inherit;
+            }
+            .nsk-theme-toggle:hover { opacity: 1; background: rgba(0,0,0,0.05); color: var(--SmartThemeQuoteColor); }
             .nsk-close {
                 cursor: pointer; background: none; border: none; padding: 0; opacity: 0.5; font-size: 1.4em;
                 display: flex; align-items: center; justify-content: center; width: 32px; height: 32px;
                 transition: 0.2s; border-radius: 50%; color: inherit;
             }
             .nsk-close:hover { opacity: 1; background: rgba(0,0,0,0.05); color: var(--SmartThemeQuoteColor); }
+
+            .nsk-overlay.afm-dark-mode .nsk-box,
+            .nsk-overlay.afm-dark-mode .afm-modal-box {
+                background-color: rgba(30,30,30,0.96) !important; color: #eee !important;
+            }
+            .nsk-overlay.afm-dark-mode .nsk-header,
+            .nsk-overlay.afm-dark-mode .nsk-tabs,
+            .nsk-overlay.afm-dark-mode #grid-container,
+            .nsk-overlay.afm-dark-mode .afm-setting-header {
+                border-color: rgba(255,255,255,0.1) !important;
+            }
+            .nsk-overlay.afm-dark-mode .nsk-theme-toggle:hover,
+            .nsk-overlay.afm-dark-mode .nsk-close:hover { background: rgba(255,255,255,0.1); }
+            .nsk-overlay.afm-dark-mode .afm-sub-tab,
+            .nsk-overlay.afm-dark-mode .afm-tool-btn,
+            .nsk-overlay.afm-dark-mode .afm-card,
+            .nsk-overlay.afm-dark-mode .afm-setting-group,
+            .nsk-overlay.afm-dark-mode .afm-modal-option,
+            .nsk-overlay.afm-dark-mode .afm-backup-btn,
+            .nsk-overlay.afm-dark-mode .afm-binding-item,
+            .nsk-overlay.afm-dark-mode .afm-binding-current,
+            .nsk-overlay.afm-dark-mode .afm-storage-status,
+            .nsk-overlay.afm-dark-mode .afm-update-status,
+            .nsk-overlay.afm-dark-mode .afm-import-preview-card {
+                background: rgba(0,0,0,0.28); border-color: rgba(255,255,255,0.12); color: #eee;
+            }
+            .nsk-overlay.afm-dark-mode .afm-card.active,
+            .nsk-overlay.afm-dark-mode .afm-modal-option.active { border-color: var(--SmartThemeQuoteColor); }
+            .nsk-overlay.afm-dark-mode .afm-sub-tab.active {
+                background: var(--SmartThemeQuoteColor); border-color: var(--SmartThemeQuoteColor); color: white;
+            }
+            .nsk-overlay.afm-dark-mode .afm-search-input,
+            .nsk-overlay.afm-dark-mode .afm-select,
+            .nsk-overlay.afm-dark-mode .afm-num-input,
+            .nsk-overlay.afm-dark-mode .afm-modal-input,
+            .nsk-overlay.afm-dark-mode .afm-modal-select,
+            .nsk-overlay.afm-dark-mode .afm-binding-select,
+            .nsk-overlay.afm-dark-mode .afm-binding-num-input,
+            .nsk-overlay.afm-dark-mode .afm-import-name-input {
+                background: rgba(0,0,0,0.42); border-color: rgba(255,255,255,0.15); color: #eee;
+            }
+            .nsk-overlay.afm-dark-mode .afm-btn-sm,
+            .nsk-overlay.afm-dark-mode .afm-modal-cancel,
+            .nsk-overlay.afm-dark-mode .afm-reset-setting-btn,
+            .nsk-overlay.afm-dark-mode .afm-save-setting-btn,
+            .nsk-overlay.afm-dark-mode .afm-binding-action:not(.primary),
+            .nsk-overlay.afm-dark-mode .afm-page-btn {
+                background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.14); color: #eee;
+            }
+            .nsk-overlay.afm-dark-mode .afm-card-img-box,
+            .nsk-overlay.afm-dark-mode .afm-modal-details,
+            .nsk-overlay.afm-dark-mode .afm-import-preview-img { background: rgba(0,0,0,0.42); }
 
             .nsk-tabs {
                 display: flex; border-bottom: 1px solid rgba(0,0,0,0.05); padding: 0 10px; flex-shrink: 0;
@@ -1401,18 +1461,22 @@
         let selectedIndices = new Set();
         let currentData = await DataManager.load();
         await refreshThemeFolderOptions();
+        const isDarkMode = localStorage.getItem(DARK_MODE_STORAGE_KEY) === 'true';
         const uiState = {
             user: { sort: 'order', group: 'all', search: '', page: 0 },
             char: { sort: 'order', group: 'all', search: '', page: 0 }
         };
 
         const popupHTML = `
-            <div class="nsk-overlay">
+            <div class="nsk-overlay ${isDarkMode ? 'afm-dark-mode' : ''}">
                 <div class="nsk-box">
                     
                     <div class="nsk-header">
                         <div class="nsk-title"><i class="fa-solid fa-crop-simple"></i> ${SCRIPT_NAME}<span class="nsk-version">v${SCRIPT_VERSION}</span></div>
-                        <button class="nsk-close"><i class="fa-solid fa-xmark"></i></button>
+                        <div class="nsk-header-actions">
+                            <button class="nsk-theme-toggle" id="afm-theme-toggle" title="切换日间/夜间模式"><i class="fa-solid ${isDarkMode ? 'fa-sun' : 'fa-moon'}"></i></button>
+                            <button class="nsk-close"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
                     </div>
 
                     <div class="nsk-tabs">
@@ -1486,6 +1550,12 @@
 
         const $popup = $(popupHTML);
         $('body').append($popup);
+        $popup.find('#afm-theme-toggle').on('click', function() {
+            const darkModeEnabled = !$popup.hasClass('afm-dark-mode');
+            $popup.toggleClass('afm-dark-mode', darkModeEnabled);
+            $(this).find('i').toggleClass('fa-moon', !darkModeEnabled).toggleClass('fa-sun', darkModeEnabled);
+            localStorage.setItem(DARK_MODE_STORAGE_KEY, String(darkModeEnabled));
+        });
         let selectedBindingThemeId = getCurrentThemeSnapshot().id || '';
         let themeBindingAppliedHandler = null;
 
