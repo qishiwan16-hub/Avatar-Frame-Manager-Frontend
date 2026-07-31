@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.3.1';
+    const SCRIPT_VERSION = '2.3.2';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -1036,6 +1036,11 @@
             .afm-backup-btn.primary { background: var(--SmartThemeQuoteColor); color: white; }
             .afm-update-status { padding: 9px 10px; margin-bottom: 10px; border-left: 3px solid var(--SmartThemeQuoteColor); background: rgba(0,0,0,0.04); font-size: 0.84em; line-height: 1.45; overflow-wrap: anywhere; }
             .afm-update-status.error { border-left-color: #d65353; color: #d65353; }
+            .afm-storage-status { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-left: 3px solid var(--SmartThemeQuoteColor); background: rgba(0,0,0,0.04); }
+            .afm-storage-status i { width: 18px; text-align: center; color: var(--SmartThemeQuoteColor); }
+            .afm-storage-status strong, .afm-storage-status span { display: block; }
+            .afm-storage-status strong { font-size: 0.92em; }
+            .afm-storage-status span { margin-top: 2px; font-size: 0.78em; opacity: 0.68; overflow-wrap: anywhere; }
 
             /* 设置面板 */
             .afm-settings-container { padding: 10px 5px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 20px; }
@@ -1200,6 +1205,12 @@
         const u = data.userSettings;
         const c = data.charSettings;
         const pseudo = data.pseudoTarget || 'after';
+        const storageMode = DataManager.getStorageMode();
+        const storageStatus = storageMode === 'server'
+            ? { icon: 'fa-server', title: '当前存储：酒馆后端', detail: '头像框配置和图片保存在服务器' }
+            : storageMode === 'local'
+                ? { icon: 'fa-database', title: '当前存储：浏览器', detail: '后端不可用，使用 IndexedDB 保存' }
+                : { icon: 'fa-spinner fa-spin', title: '当前存储：检测中', detail: '正在检测酒馆后端连接' };
 
         const createSlider = (label, key, val, group, min=-100, max=200) => `
             <div class="afm-control-row">
@@ -1211,6 +1222,10 @@
 
         return `
             <div class="afm-settings-container">
+                <div class="afm-storage-status">
+                    <i class="fa-solid ${storageStatus.icon}"></i>
+                    <div><strong>${storageStatus.title}</strong><span>${storageStatus.detail}</span></div>
+                </div>
                 <div class="afm-setting-group">
                     <div class="afm-setting-header">
                         <span><i class="fa-solid fa-user"></i> User 头像框调整 (%)</span>
