@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.5.0';
+    const SCRIPT_VERSION = '2.6.0';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -229,6 +229,7 @@
         },
         load: async function() {
             const db = await this._init();
+            let shouldPersist = false;
             let data = await new Promise(resolve => {
                 const tx = db.transaction(STORE_NAME, 'readonly');
                 const req = tx.objectStore(STORE_NAME).get(DATA_KEY);
@@ -251,9 +252,10 @@
                     activeUserSrc: null, activeCharSrc: null, pseudoTarget: 'after',
                     userSettings: { ...DEFAULT_CONFIG }, charSettings: { ...DEFAULT_CONFIG }
                 };
+                shouldPersist = true;
             }
             data = normalizeFrameData(data);
-            await this.save(data);
+            if (shouldPersist) await this.save(data);
             return data;
         },
         save: async function(data) {
@@ -500,6 +502,103 @@
             pos = dataStart + compSize;
         }
         return files;
+    }
+
+    async function inflateZipEntry(bytes) {
+        if (typeof DecompressionStream !== 'function') throw new Error('当前浏览器不支持解压普通 ZIP，请更新浏览器或酒馆 WebView');
+        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+        return new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+
+    async function extractGifItemsFromZip(file) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const readU16 = pos => bytes[pos] | (bytes[pos + 1] << 8);
+        const readU32 = pos => (bytes[pos] | (bytes[pos + 1] << 8) | (bytes[pos + 2] << 16) | (bytes[pos + 3] << 24)) >>> 0;
+        const minEocd = Math.max(0, bytes.length - 65557);
+        let eocd = -1;
+        for (let pos = bytes.length - 22; pos >= minEocd; pos--) {
+            if (readU32(pos) === 0x06054b50) { eocd = pos; break; }
+        }
+        if (eocd < 0) throw new Error(`“${file.name}”不是有效的 ZIP 文件`);
+        const entryCount = readU16(eocd + 10);
+        let centralPos = readU32(eocd + 16);
+        const utf8 = new TextDecoder('utf-8');
+        const items = [];
+        let totalBytes = 0;
+        for (let index = 0; index < entryCount; index++) {
+            if (centralPos + 46 > bytes.length || readU32(centralPos) !== 0x02014b50) throw new Error('ZIP 中央目录损坏或使用了不支持的 ZIP64 格式');
+            const flags = readU16(centralPos + 8);
+            const method = readU16(centralPos + 10);
+            const compressedSize = readU32(centralPos + 20);
+            const uncompressedSize = readU32(centralPos + 24);
+            const nameLength = readU16(centralPos + 28);
+            const extraLength = readU16(centralPos + 30);
+            const commentLength = readU16(centralPos + 32);
+            const localOffset = readU32(centralPos + 42);
+            const nameBytes = bytes.slice(centralPos + 46, centralPos + 46 + nameLength);
+            const entryName = utf8.decode(nameBytes).replace(/\\/g, '/');
+            centralPos += 46 + nameLength + extraLength + commentLength;
+            if (!/\.gif$/i.test(entryName) || entryName.endsWith('/') || /(^|\/)__MACOSX\//i.test(entryName)) continue;
+            if (flags & 0x0001) throw new Error(`ZIP 内的“${entryName}”已加密，无法导入`);
+            if (items.length >= 500) throw new Error('单个 ZIP 最多导入 500 个 GIF 文件');
+            if (!uncompressedSize || uncompressedSize > 20 * 1024 * 1024) throw new Error(`“${entryName}”为空或超过 20 MB`);
+            totalBytes += uncompressedSize;
+            if (totalBytes > 300 * 1024 * 1024) throw new Error('ZIP 内 GIF 解压后总大小不能超过 300 MB');
+            if (localOffset + 30 > bytes.length || readU32(localOffset) !== 0x04034b50) throw new Error(`“${entryName}”的 ZIP 条目损坏`);
+            const localNameLength = readU16(localOffset + 26);
+            const localExtraLength = readU16(localOffset + 28);
+            const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+            const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+            let data;
+            if (method === 0) data = compressed;
+            else if (method === 8) data = await inflateZipEntry(compressed);
+            else throw new Error(`“${entryName}”使用了不支持的 ZIP 压缩方式`);
+            if (data.length !== uncompressedSize) throw new Error(`“${entryName}”解压后的大小不正确`);
+            const signature = String.fromCharCode(...data.slice(0, 6));
+            if (signature !== 'GIF87a' && signature !== 'GIF89a') continue;
+            const blob = new Blob([data], { type: 'image/gif' });
+            const baseName = entryName.split('/').pop() || `头像框${items.length + 1}.gif`;
+            const previewUrl = URL.createObjectURL(blob);
+            items.push({ src: previewUrl, previewUrl, blob, name: getFrameNameFromFile({ name: baseName }, items.length + 1) });
+        }
+        return items;
+    }
+
+    async function mapWithConcurrency(items, concurrency, mapper) {
+        const results = new Array(items.length);
+        let cursor = 0;
+        const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+            while (cursor < items.length) {
+                const index = cursor++;
+                results[index] = await mapper(items[index], index);
+            }
+        });
+        await Promise.all(workers);
+        return results;
+    }
+
+    async function persistImportedImages(items) {
+        const useBackend = await DataManager._detectBackend();
+        return mapWithConcurrency(items, useBackend ? 3 : 4, async item => {
+            if (!item.blob) return { ...item };
+            const dataUrl = await blobToDataUrl(item.blob);
+            if (useBackend) {
+                try {
+                    const stored = await requestBackend('/images', { method: 'POST', body: { dataUrl }, timeout: 45000 });
+                    if (stored && stored.ok && stored.url) return { ...item, src: stored.url };
+                } catch (error) {
+                    console.warn('[头像框管理器] 后端保存导入图片失败，交由配置保存流程重试', error);
+                }
+            }
+            return { ...item, src: dataUrl };
+        });
+    }
+
+    function releaseImportPreviews(items) {
+        (items || []).forEach(item => {
+            if (!item.previewUrl) return;
+            try { URL.revokeObjectURL(item.previewUrl); } catch (error) {}
+        });
     }
 
     async function buildBackupZip(data, selectedRole = null, selectedIndexSet = null) {
@@ -1530,7 +1629,7 @@
                                 </div>
                             </div>
                             <!-- 隐藏的文件输入框 -->
-                            <input type="file" id="afm-file-input" accept="image/*" multiple style="display:none;">
+                            <input type="file" id="afm-file-input" accept="image/*,.zip,application/zip" multiple style="display:none;">
                             <input type="file" id="afm-json-input" accept="application/json" style="display:none;">
                             <input type="file" id="afm-zip-input" accept=".zip,application/zip" style="display:none;">
                         </div>
@@ -2415,82 +2514,78 @@
         });
 
         $popup.find('#afm-file-input').on('change', async function(e) {
-            const fileArray = Array.from(e.target.files || []).filter(file => !file.type || file.type.startsWith('image/'));
-            if (!fileArray || fileArray.length === 0) {
-                $(this).val('');
-                if (window.toastr) toastr.warning('未选择有效图片文件');
-                return;
-            }
-
+            const selectedFiles = Array.from(e.target.files || []);
             const activeRole = $popup.find('#grid-char').hasClass('active') ? 'char' : 'user';
-
-            const readFiles = fileArray.map((file, index) => {
-                return new Promise(resolve => {
-                    const reader = new FileReader();
-                    reader.onload = (event) => resolve({ src: event.target.result, name: getFrameNameFromFile(file, index + 1) });
-                    reader.onerror = () => resolve(null);
-                    reader.readAsDataURL(file);
-                });
-            });
-
-            const initialItems = (await Promise.all(readFiles)).filter(item => item && item.src);
-            if (initialItems.length === 0) {
-                $(this).val('');
-                if (window.toastr) toastr.warning('图片读取失败，未导入数据');
-                return;
-            }
-
-            const importPlan = await askImportTarget(activeRole, initialItems, showAFMImportPreviewDialog);
-            if (!importPlan || !importPlan.roles || importPlan.items.length === 0) {
-                $(this).val('');
-                return;
-            }
-
-            currentData = await DataManager.load();
-            let addedCount = 0;
-            const now = Date.now();
-
-            importPlan.roles.forEach(role => {
-                const list = role === 'user' ? currentData.userFrames : currentData.charFrames;
-                let maxOrder = list.reduce((max, item) => Math.max(max, Number(item.order) || 0), 0);
-                importPlan.items.forEach((res) => {
-                    const isExist = list.some(item => item.src === res.src);
-                    if (!isExist) {
-                        maxOrder += 1;
-                        list.push({ src: res.src, name: res.name, favorite: false, group: DEFAULT_GROUP, createdAt: now + addedCount, order: maxOrder });
-                        addedCount++;
+            const initialItems = [];
+            try {
+                for (const file of selectedFiles) {
+                    const isZip = /\.zip$/i.test(file.name || '') || /(?:application\/zip|application\/x-zip-compressed)/i.test(file.type || '');
+                    if (isZip) {
+                        initialItems.push(...await extractGifItemsFromZip(file));
+                        continue;
                     }
+                    if (file.type && !file.type.startsWith('image/')) continue;
+                    const previewUrl = URL.createObjectURL(file);
+                    initialItems.push({ src: previewUrl, previewUrl, blob: file, name: getFrameNameFromFile(file, initialItems.length + 1) });
+                }
+                if (initialItems.length === 0) {
+                    if (window.toastr) toastr.warning('未找到可导入的图片；ZIP 中只会读取 GIF 文件');
+                    return;
+                }
+                const importPlan = await askImportTarget(activeRole, initialItems, showAFMImportPreviewDialog);
+                if (!importPlan || !importPlan.roles || importPlan.items.length === 0) return;
+                const persistedItems = await persistImportedImages(importPlan.items);
+                currentData = await DataManager.load();
+                let addedCount = 0;
+                const now = Date.now();
+                importPlan.roles.forEach(role => {
+                    const list = role === 'user' ? currentData.userFrames : currentData.charFrames;
+                    const existingSources = new Set(list.map(item => item.src));
+                    let maxOrder = list.reduce((max, item) => Math.max(max, Number(item.order) || 0), 0);
+                    persistedItems.forEach(item => {
+                        if (!item.src || existingSources.has(item.src)) return;
+                        maxOrder += 1;
+                        existingSources.add(item.src);
+                        list.push({ src: item.src, name: item.name, favorite: false, group: DEFAULT_GROUP, createdAt: now + addedCount, order: maxOrder });
+                        addedCount++;
+                    });
                 });
-            });
-
-            if (addedCount > 0) {
-                await DataManager.save(currentData);
-                await refreshGrids();
-                const targetText = importPlan.roles.map(getRoleLabel).join(' + ');
-                if (window.toastr) toastr.success(`成功导入 ${addedCount} 条头像框记录到 ${targetText}`);
-            } else {
-                if (window.toastr) toastr.warning('所选图片已存在，未新增数据');
+                if (addedCount > 0) {
+                    await DataManager.save(currentData);
+                    renderRoleGrid(getActiveRole());
+                    refreshControls();
+                    renderBindings();
+                    const targetText = importPlan.roles.map(getRoleLabel).join(' + ');
+                    if (window.toastr) toastr.success(`成功导入 ${addedCount} 条头像框记录到 ${targetText}`);
+                } else if (window.toastr) toastr.warning('所选图片已存在，未新增数据');
+            } catch (error) {
+                if (window.toastr) toastr.error(`头像框导入失败：${error.message || error}`);
+            } finally {
+                releaseImportPreviews(initialItems);
+                $(this).val('');
             }
-            $(this).val('');
         });
         // 搜索 / 排序 / 分组筛选
-        $popup.find('.afm-search-input').on('input', async function() {
+        $popup.find('.afm-search-input').on('input', function() {
             const role = getActiveRole();
             uiState[role].search = $(this).val().toLowerCase();
             uiState[role].page = 0;
-            await refreshGrids(role);
+            renderRoleGrid(role);
+            refreshControls();
         });
-        $popup.find('.afm-sort-select').on('change', async function() {
+        $popup.find('.afm-sort-select').on('change', function() {
             const role = getActiveRole();
             uiState[role].sort = $(this).val();
             uiState[role].page = 0;
-            await refreshGrids(role);
+            renderRoleGrid(role);
+            refreshControls();
         });
-        $popup.find('.afm-group-filter').on('change', async function() {
+        $popup.find('.afm-group-filter').on('change', function() {
             const role = getActiveRole();
             uiState[role].group = $(this).val();
             uiState[role].page = 0;
-            await refreshGrids(role);
+            renderRoleGrid(role);
+            refreshControls();
         });
     }
 
