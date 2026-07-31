@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.2.0';
+    const SCRIPT_VERSION = '2.3.0';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -183,7 +183,45 @@
     // ===========================
     // 1. 数据逻辑层
     // ===========================
-    const DataManager = {
+    const BACKEND_BASE_URL = '/api/plugins/avatar-frame-manager';
+    const BACKEND_PENDING_SYNC_KEY = 'afm_backend_pending_sync_v1';
+
+    function cloneFrameData(data) {
+        return JSON.parse(JSON.stringify(data));
+    }
+
+    function getBackendRequestHeaders() {
+        const context = getSillyTavernContext();
+        try {
+            if (typeof context.getRequestHeaders === 'function') return context.getRequestHeaders();
+        } catch (error) {}
+        try {
+            if (typeof window.getRequestHeaders === 'function') return window.getRequestHeaders();
+        } catch (error) {}
+        const headers = { 'Content-Type': 'application/json' };
+        if (window.token) headers['X-CSRF-Token'] = window.token;
+        return headers;
+    }
+
+    async function requestBackend(path, options = {}) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), options.timeout || 5000);
+        try {
+            const response = await fetch(`${BACKEND_BASE_URL}${path}`, {
+                method: options.method || 'GET',
+                headers: getBackendRequestHeaders(),
+                body: options.body === undefined ? undefined : JSON.stringify(options.body),
+                signal: controller.signal,
+                cache: 'no-store'
+            });
+            if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+            return response.json();
+        } finally {
+            clearTimeout(timeout);
+        }
+    }
+
+    const LocalDataStore = {
         _db: null,
         _init: function() {
             return new Promise((resolve, reject) => {
@@ -235,6 +273,92 @@
         }
     };
 
+    const DataManager = {
+        _mode: 'unknown',
+        _cache: null,
+        _detectPromise: null,
+        _saveQueue: Promise.resolve(),
+        _detectBackend: async function() {
+            if (this._mode !== 'unknown') return this._mode === 'server';
+            if (!this._detectPromise) {
+                this._detectPromise = requestBackend('/status', { timeout: 2500 })
+                    .then(result => {
+                        this._mode = result && result.ok ? 'server' : 'local';
+                        return this._mode === 'server';
+                    })
+                    .catch(() => {
+                        this._mode = 'local';
+                        return false;
+                    });
+            }
+            return this._detectPromise;
+        },
+        _loadServer: async function() {
+            const result = await requestBackend('/data');
+            if (!result || !result.ok) throw new Error('头像框后端返回了无效数据');
+            let data = normalizeFrameData(result.data);
+            const pendingSync = localStorage.getItem(BACKEND_PENDING_SYNC_KEY) === '1';
+            if (!data.schemaVersion || pendingSync) {
+                const localData = await LocalDataStore.load();
+                const hasLocalData = localData.userFrames.length > 0 || localData.charFrames.length > 0 || Object.keys(localData.themeBindings || {}).length > 0;
+                if (hasLocalData || pendingSync) {
+                    data = await this._saveServer(localData);
+                    localStorage.removeItem(BACKEND_PENDING_SYNC_KEY);
+                    if (!result.data?.schemaVersion && window.toastr) toastr.success('本地头像框已迁移到酒馆后端');
+                }
+            }
+            this._cache = normalizeFrameData(data);
+            await LocalDataStore.save(this._cache).catch(() => {});
+            return cloneFrameData(this._cache);
+        },
+        _saveServer: async function(data) {
+            const result = await requestBackend('/data', { method: 'PUT', body: normalizeFrameData(data), timeout: 30000 });
+            if (!result || !result.ok || !result.data) throw new Error('头像框后端保存失败');
+            return normalizeFrameData(result.data);
+        },
+        load: async function() {
+            if (this._cache) return cloneFrameData(this._cache);
+            if (await this._detectBackend()) {
+                try {
+                    return await this._loadServer();
+                } catch (error) {
+                    console.warn('[头像框管理器] 后端读取失败，临时使用 IndexedDB', error);
+                    this._mode = 'local';
+                }
+            }
+            this._cache = normalizeFrameData(await LocalDataStore.load());
+            return cloneFrameData(this._cache);
+        },
+        save: async function(data) {
+            const task = async () => {
+                const normalized = normalizeFrameData(data);
+                if (await this._detectBackend()) {
+                    try {
+                        const saved = await this._saveServer(normalized);
+                        Object.keys(data).forEach(key => delete data[key]);
+                        Object.assign(data, cloneFrameData(saved));
+                        this._cache = saved;
+                        localStorage.removeItem(BACKEND_PENDING_SYNC_KEY);
+                        await LocalDataStore.save(saved).catch(() => {});
+                        return;
+                    } catch (error) {
+                        console.warn('[头像框管理器] 后端保存失败，保留到 IndexedDB', error);
+                        localStorage.setItem(BACKEND_PENDING_SYNC_KEY, '1');
+                        if (window.toastr) toastr.warning('后端保存失败，当前修改已暂存到浏览器');
+                    }
+                }
+                this._cache = normalized;
+                await LocalDataStore.save(normalized);
+            };
+            const next = this._saveQueue.then(task, task);
+            this._saveQueue = next.catch(() => {});
+            return next;
+        },
+        getStorageMode: function() {
+            return this._mode;
+        }
+    };
+
     function downloadJSON(data, filename) {
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -261,8 +385,17 @@
         return new Uint8Array(await blob.arrayBuffer());
     }
 
-    function dataUrlToBlob(dataUrl) {
-        const parts = String(dataUrl || '').split(',');
+    async function dataUrlToBlob(source) {
+        const value = String(source || '');
+        if (!value.startsWith('data:')) {
+            try {
+                const response = await fetch(value);
+                return response.ok ? await response.blob() : new Blob([], { type: 'application/octet-stream' });
+            } catch (error) {
+                return new Blob([], { type: 'application/octet-stream' });
+            }
+        }
+        const parts = value.split(',');
         if (parts.length < 2) return new Blob([], { type: 'application/octet-stream' });
         const mimeMatch = parts[0].match(/data:([^;]+)/);
         const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
@@ -270,6 +403,15 @@
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         return new Blob([bytes], { type: mime });
+    }
+
+    async function blobToDataUrl(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(reader.error || new Error('图片读取失败'));
+            reader.readAsDataURL(blob);
+        });
     }
 
     function getImageExtFromDataUrl(dataUrl) {
@@ -380,6 +522,30 @@
         if (backup.userSettings) settingsBackup.userSettings = backup.userSettings;
         if (backup.charSettings) settingsBackup.charSettings = backup.charSettings;
         settingsBackup.themeBindings = backup.themeBindings;
+        const imageReplacements = new Map();
+        const hydrateImages = async frames => {
+            for (const frame of frames || []) {
+                if (!frame || !frame.src || String(frame.src).startsWith('data:')) continue;
+                try {
+                    const original = String(frame.src);
+                    const blob = await dataUrlToBlob(frame.src);
+                    if (blob.size > 0) {
+                        frame.src = await blobToDataUrl(blob);
+                        imageReplacements.set(original, frame.src);
+                    }
+                } catch (error) {}
+            }
+        };
+        await hydrateImages(backup.userFrames);
+        await hydrateImages(backup.charFrames);
+        const replaceImageReferences = value => {
+            if (typeof value === 'string') return imageReplacements.get(value) || value;
+            if (Array.isArray(value)) return value.map(replaceImageReferences);
+            if (!value || typeof value !== 'object') return value;
+            Object.keys(value).forEach(key => { value[key] = replaceImageReferences(value[key]); });
+            return value;
+        };
+        replaceImageReferences(backup);
         const entries = [
             { name: 'avatar-frame-backup.json', data: JSON.stringify(backup, null, 2) },
             { name: 'config/avatar-frame-settings.json', data: JSON.stringify(settingsBackup, null, 2) }
@@ -389,7 +555,7 @@
                 const frame = frames[i];
                 if (!frame.src || !String(frame.src).startsWith('data:')) continue;
                 const ext = getImageExtFromDataUrl(frame.src);
-                entries.push({ name: `images/${role}/${String(i + 1).padStart(3, '0')}_${sanitizeFileName(frame.name)}.${ext}`, data: await blobToUint8Array(dataUrlToBlob(frame.src)) });
+                entries.push({ name: `images/${role}/${String(i + 1).padStart(3, '0')}_${sanitizeFileName(frame.name)}.${ext}`, data: await blobToUint8Array(await dataUrlToBlob(frame.src)) });
             }
         };
         if (isUserScope) await addImages('user', backup.userFrames);
