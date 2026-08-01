@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.6.0';
+    const SCRIPT_VERSION = '2.6.1';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -554,9 +554,15 @@
             else if (method === 8) data = await inflateZipEntry(compressed);
             else throw new Error(`“${entryName}”使用了不支持的 ZIP 压缩方式`);
             if (data.length !== uncompressedSize) throw new Error(`“${entryName}”解压后的大小不正确`);
-            const signature = String.fromCharCode(...data.slice(0, 6));
-            if (signature !== 'GIF87a' && signature !== 'GIF89a') continue;
-            const blob = new Blob([data], { type: 'image/gif' });
+            const signature = String.fromCharCode(...data.slice(0, 12));
+            let mime = '';
+            if (signature.startsWith('GIF87a') || signature.startsWith('GIF89a')) mime = 'image/gif';
+            else if (data[0] === 0x89 && signature.slice(1, 4) === 'PNG') mime = 'image/png';
+            else if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) mime = 'image/jpeg';
+            else if (signature.startsWith('RIFF') && signature.slice(8, 12) === 'WEBP') mime = 'image/webp';
+            else if (signature.startsWith('BM')) mime = 'image/bmp';
+            if (!mime) continue;
+            const blob = new Blob([data], { type: mime });
             const baseName = entryName.split('/').pop() || `头像框${items.length + 1}.gif`;
             const previewUrl = URL.createObjectURL(blob);
             items.push({ src: previewUrl, previewUrl, blob, name: getFrameNameFromFile({ name: baseName }, items.length + 1) });
