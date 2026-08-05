@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.9.4';
+    const SCRIPT_VERSION = '3.0.0';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -62,29 +62,40 @@
     function normalizePresets(presets) {
         if (!Array.isArray(presets)) return [];
         const usedIds = new Set();
+        const activeThemes = new Set();
         return presets.map((rawPreset, index) => {
             const preset = rawPreset && typeof rawPreset === 'object' ? rawPreset : {};
             let id = String(preset.id || '').trim();
             if (!id || usedIds.has(id)) id = createPresetId();
             usedIds.add(id);
+            const themeId = normalizeThemeId(preset.themeId || '');
+            const isActive = !!preset.isActive && !!themeId && !activeThemes.has(themeId);
+            if (isActive) activeThemes.add(themeId);
             return {
                 id,
                 name: String(preset.name || `预设 ${index + 1}`).trim() || `预设 ${index + 1}`,
                 activeUserSrc: String(preset.activeUserSrc || preset.userFrameSrc || '').trim() || null,
                 activeCharSrc: String(preset.activeCharSrc || preset.charFrameSrc || '').trim() || null,
                 pseudoTarget: preset.pseudoTarget === 'before' ? 'before' : 'after',
+                themeId,
+                themeName: String(preset.themeName || preset.themeId || '').trim(),
+                isActive,
                 updatedAt: Number(preset.updatedAt) || Date.now()
             };
         });
     }
 
     function createPresetSnapshot(data, name, id = createPresetId()) {
+        const theme = getCurrentThemeSnapshot();
         return {
             id,
             name: String(name || '未命名预设').trim() || '未命名预设',
             activeUserSrc: data.activeUserSrc || null,
             activeCharSrc: data.activeCharSrc || null,
             pseudoTarget: data.pseudoTarget === 'before' ? 'before' : 'after',
+            themeId: normalizeThemeId(theme.id),
+            themeName: String(theme.name || theme.id || '').trim(),
+            isActive: true,
             updatedAt: Date.now()
         };
     }
@@ -96,26 +107,50 @@
             (preset.pseudoTarget || 'after') === (data.pseudoTarget || 'after');
     }
 
-    function hasLegacyScopedPositionSettings(data) {
+    function hasLegacyData(data) {
         const hasSettings = value => value && typeof value === 'object' &&
             (Object.prototype.hasOwnProperty.call(value, 'userSettings') ||
              Object.prototype.hasOwnProperty.call(value, 'charSettings') ||
              Object.prototype.hasOwnProperty.call(value, 'settings'));
-        return Object.values(data?.themeBindings || {}).some(hasSettings) ||
-            (Array.isArray(data?.presets) && data.presets.some(hasSettings));
+        return Object.keys(data?.themeBindings || {}).length > 0 ||
+            (Array.isArray(data?.presets) && data.presets.some(preset => hasSettings(preset) || !normalizeThemeId(preset?.themeId)));
     }
 
-    function clearFrameFromThemeBindings(data, role, frameSrc) {
-        if (!data || !frameSrc) return;
-        const key = role === 'char' ? 'charFrameSrc' : 'userFrameSrc';
-        Object.keys(data.themeBindings || {}).forEach(themeId => {
-            const binding = data.themeBindings[themeId];
-            if (binding[key] === frameSrc) binding[key] = '';
-            if (!binding.userFrameSrc && !binding.charFrameSrc) delete data.themeBindings[themeId];
+    function mergeLegacyBindingsIntoPresets(presets, bindings, pseudoTarget) {
+        const result = normalizePresets(presets);
+        Object.values(normalizeThemeBindings(bindings)).forEach(binding => {
+            let preset = result.find(item => item.themeId === binding.themeId);
+            if (!preset) {
+                preset = result.find(item => !item.themeId &&
+                    (item.activeUserSrc || null) === (binding.userFrameSrc || null) &&
+                    (item.activeCharSrc || null) === (binding.charFrameSrc || null));
+            }
+            if (!preset) {
+                preset = {
+                    id: createPresetId(),
+                    name: `${binding.themeName}（原绑定）`,
+                    activeUserSrc: binding.userFrameSrc || null,
+                    activeCharSrc: binding.charFrameSrc || null,
+                    pseudoTarget: pseudoTarget === 'before' ? 'before' : 'after',
+                    updatedAt: Number(binding.updatedAt) || Date.now()
+                };
+                result.push(preset);
+            }
+            preset.themeId = binding.themeId;
+            preset.themeName = binding.themeName;
+            preset.isActive = true;
         });
+        return result;
+    }
+
+    function clearFrameFromPresets(data, role, frameSrc) {
+        if (!data || !frameSrc) return;
         const presetKey = role === 'char' ? 'activeCharSrc' : 'activeUserSrc';
         (data.presets || []).forEach(preset => {
-            if (preset[presetKey] === frameSrc) preset[presetKey] = null;
+            if (preset[presetKey] === frameSrc) {
+                preset[presetKey] = null;
+                preset.isActive = false;
+            }
         });
         if (data.activePresetId) data.activePresetId = null;
     }
@@ -145,11 +180,25 @@
         if (!data.pseudoTarget) data.pseudoTarget = 'after';
         data.userSettings = normalizeBindingSettings(data.userSettings);
         data.charSettings = normalizeBindingSettings(data.charSettings);
-        data.themeBindings = normalizeThemeBindings(data.themeBindings);
-        data.presets = normalizePresets(data.presets);
+        data.presets = mergeLegacyBindingsIntoPresets(data.presets, data.themeBindings, data.pseudoTarget);
+        delete data.themeBindings;
+        const currentTheme = getCurrentThemeSnapshot();
+        data.presets.forEach(preset => {
+            if (!preset.themeId) {
+                preset.themeId = normalizeThemeId(currentTheme.id);
+                preset.themeName = String(currentTheme.name || currentTheme.id || '').trim();
+            }
+        });
         data.activePresetId = String(data.activePresetId || '').trim() || null;
         const activePreset = data.presets.find(preset => preset.id === data.activePresetId);
-        if (!activePreset || !presetMatchesData(activePreset, data)) data.activePresetId = null;
+        if (activePreset && presetMatchesData(activePreset, data)) {
+            data.presets.forEach(preset => {
+                if (preset.themeId === activePreset.themeId) preset.isActive = preset.id === activePreset.id;
+            });
+        } else {
+            if (activePreset) activePreset.isActive = false;
+            data.activePresetId = null;
+        }
         return data;
     }
 
@@ -306,7 +355,7 @@
                 };
                 shouldPersist = true;
             }
-            const needsMigration = hasLegacyScopedPositionSettings(data);
+            const needsMigration = hasLegacyData(data);
             data = normalizeFrameData(data);
             if (shouldPersist || needsMigration) await this.save(data);
             return data;
@@ -346,12 +395,12 @@
         _loadServer: async function() {
             const result = await requestBackend('/data');
             if (!result || !result.ok) throw new Error('头像框后端返回了无效数据');
-            const needsMigration = hasLegacyScopedPositionSettings(result.data);
+            const needsMigration = hasLegacyData(result.data);
             let data = normalizeFrameData(result.data);
             const pendingSync = localStorage.getItem(BACKEND_PENDING_SYNC_KEY) === '1';
             if (!data.schemaVersion || pendingSync) {
                 const localData = await LocalDataStore.load();
-                const hasLocalData = localData.userFrames.length > 0 || localData.charFrames.length > 0 || Object.keys(localData.themeBindings || {}).length > 0;
+                const hasLocalData = localData.userFrames.length > 0 || localData.charFrames.length > 0 || localData.presets.length > 0;
                 if (hasLocalData || pendingSync) {
                     data = await this._saveServer(localData);
                     localStorage.removeItem(BACKEND_PENDING_SYNC_KEY);
@@ -669,7 +718,6 @@
             userSettings: isUserScope ? normalized.userSettings : null,
             charSettings: isCharScope ? normalized.charSettings : null,
             pseudoTarget: normalized.pseudoTarget,
-            themeBindings: normalized.themeBindings,
             presets: normalized.presets,
             activePresetId: normalized.activePresetId
         };
@@ -678,7 +726,6 @@
         };
         if (backup.userSettings) settingsBackup.userSettings = backup.userSettings;
         if (backup.charSettings) settingsBackup.charSettings = backup.charSettings;
-        settingsBackup.themeBindings = backup.themeBindings;
         settingsBackup.presets = backup.presets;
         settingsBackup.activePresetId = backup.activePresetId;
         const imageReplacements = new Map();
@@ -785,20 +832,25 @@
         themeBindingSyncPromise = themeBindingSyncPromise.then(async () => {
             if (getCurrentThemeSnapshot().id !== theme.id) return;
             const data = await DataManager.load();
-            const binding = data.themeBindings[theme.id];
-            const userFrameExists = binding && binding.userFrameSrc && data.userFrames.some(frame => frame.src === binding.userFrameSrc);
-            const charFrameExists = binding && binding.charFrameSrc && data.charFrames.some(frame => frame.src === binding.charFrameSrc);
-            const nextUserFrameSrc = userFrameExists ? binding.userFrameSrc : null;
-            const nextCharFrameSrc = charFrameExists ? binding.charFrameSrc : null;
-            const changed = data.activeUserSrc !== nextUserFrameSrc || data.activeCharSrc !== nextCharFrameSrc;
+            const preset = data.presets.find(item => item.themeId === theme.id && item.isActive);
+            const userFrameExists = preset && preset.activeUserSrc && data.userFrames.some(frame => frame.src === preset.activeUserSrc);
+            const charFrameExists = preset && preset.activeCharSrc && data.charFrames.some(frame => frame.src === preset.activeCharSrc);
+            const nextUserFrameSrc = userFrameExists ? preset.activeUserSrc : null;
+            const nextCharFrameSrc = charFrameExists ? preset.activeCharSrc : null;
+            const nextPseudoTarget = preset && preset.pseudoTarget === 'before' ? 'before' : 'after';
+            const nextPresetId = preset ? preset.id : null;
+            const changed = data.activeUserSrc !== nextUserFrameSrc || data.activeCharSrc !== nextCharFrameSrc ||
+                data.pseudoTarget !== nextPseudoTarget || data.activePresetId !== nextPresetId;
             if (changed) {
                 data.activeUserSrc = nextUserFrameSrc;
                 data.activeCharSrc = nextCharFrameSrc;
+                data.pseudoTarget = nextPseudoTarget;
+                data.activePresetId = nextPresetId;
                 await DataManager.save(data);
             }
             await applyInjectedCSS(data);
             if (typeof window.CustomEvent === 'function') window.dispatchEvent(new CustomEvent('afm-theme-binding-applied', { detail: theme }));
-        }).catch(error => console.warn('[头像框管理器] 美化绑定同步失败', error));
+        }).catch(error => console.warn('[头像框管理器] 美化预设同步失败', error));
         return themeBindingSyncPromise;
     }
 
@@ -1575,60 +1627,16 @@
         `;
     }
 
-    function createBindingsHTML(data) {
-        const currentTheme = getCurrentThemeSnapshot();
-        const bindings = Object.values(data.themeBindings || {}).sort((a, b) => a.themeName.localeCompare(b.themeName, 'zh-Hans-CN'));
-        const currentThemeId = String(currentTheme.id || '').trim();
-        const selectedBinding = data.themeBindings[currentThemeId] || null;
-        const currentUserFrame = data.userFrames.find(frame => frame.src === data.activeUserSrc);
-        const currentCharFrame = data.charFrames.find(frame => frame.src === data.activeCharSrc);
-        const renderThumb = (src, role) => src ? `<img class="afm-binding-thumb" src="${escapeHTML(src)}" alt="${role}">` : `<div class="afm-binding-thumb-empty">${role}</div>`;
-        const bindingItems = bindings.length ? bindings.map(binding => `
-            <div class="afm-binding-item ${binding.themeId === currentThemeId ? 'active' : ''}" data-theme-id="${escapeHTML(binding.themeId)}">
-                ${renderThumb(binding.userFrameSrc, 'User')}
-                ${renderThumb(binding.charFrameSrc, 'Char')}
-                <div class="afm-binding-info">
-                    <div class="afm-binding-name">${escapeHTML(binding.themeName)}</div>
-                    <div class="afm-binding-meta">${escapeHTML(binding.themeId)}</div>
-                </div>
-            </div>
-        `).join('') : '<div class="afm-binding-empty">还没有美化绑定</div>';
-
-        return `
-            <div class="afm-settings-container">
-                <div class="afm-setting-group">
-                    <div class="afm-setting-header">
-                        <span><i class="fa-solid fa-link"></i> 美化绑定</span>
-                    </div>
-                    <div class="afm-binding-current"><strong>当前美化：${escapeHTML(currentTheme.name || '未检测到')}</strong><code>${escapeHTML(currentTheme.id || '未检测到美化标识')}</code></div>
-                    <div class="afm-binding-current">
-                        <strong>绑定只保存头像框选择</strong>
-                        <code>User：${escapeHTML(currentUserFrame ? currentUserFrame.name : '未选择')}</code>
-                        <code>Char：${escapeHTML(currentCharFrame ? currentCharFrame.name : '未选择')}</code>
-                        <code>设置页的 User、Char 位置数值为全局固定值，不随美化切换。</code>
-                    </div>
-                    <div class="afm-binding-actions">
-                        <button class="afm-binding-action primary" id="afm-save-binding" type="button"><i class="fa-solid fa-floppy-disk"></i> 保存绑定</button>
-                        <button class="afm-binding-action danger" id="afm-delete-binding" type="button" ${selectedBinding ? '' : 'disabled'}><i class="fa-solid fa-trash-can"></i> 删除</button>
-                    </div>
-                </div>
-                <div class="afm-setting-group">
-                    <div class="afm-setting-header"><span><i class="fa-solid fa-list"></i> 已保存绑定</span></div>
-                    <div class="afm-binding-list">${bindingItems}</div>
-                </div>
-            </div>
-        `;
-    }
-
     function createPresetsHTML(data) {
-        const presets = normalizePresets(data.presets);
+        const currentTheme = getCurrentThemeSnapshot();
+        const presets = normalizePresets(data.presets).filter(preset => preset.themeId === currentTheme.id);
         const getFrameName = (role, src) => {
             if (!src) return '未选择';
             const list = role === 'char' ? data.charFrames : data.userFrames;
             return list.find(frame => frame.src === src)?.name || '头像框已删除';
         };
         const items = presets.length ? presets.map(preset => {
-            const isActive = preset.id === data.activePresetId && presetMatchesData(preset, data);
+            const isActive = preset.isActive && preset.id === data.activePresetId && presetMatchesData(preset, data);
             return `
                 <div class="afm-preset-item ${isActive ? 'active' : ''}" data-preset-id="${escapeHTML(preset.id)}">
                     <span class="afm-preset-indicator" title="${isActive ? '当前使用中' : '未使用'}"></span>
@@ -1648,7 +1656,7 @@
             <div class="afm-settings-container">
                 <div class="afm-setting-group">
                     <div class="afm-setting-header"><span><i class="fa-solid fa-box-archive"></i> 预设管理</span></div>
-                    <div class="afm-binding-current"><strong>保存当前头像框组合</strong><code>记录 User、Char 头像框和伪元素设置；位置数值保持全局固定。</code></div>
+                    <div class="afm-binding-current"><strong>当前美化：${escapeHTML(currentTheme.name || currentTheme.id)}</strong><code>预设按当前美化分别保存；记录 User、Char 头像框和伪元素设置，位置数值保持全局固定。</code></div>
                     <button class="afm-preset-add" id="afm-add-preset" type="button"><i class="fa-solid fa-plus"></i> 将当前配置保存为新预设</button>
                 </div>
                 <div class="afm-setting-group">
@@ -1692,7 +1700,6 @@
                     <div class="nsk-tabs">
                         <div class="nsk-tab active" data-target="view-frames"><i class="fa-solid fa-image"></i> 列表</div>
                         <div class="nsk-tab" data-target="view-presets"><i class="fa-solid fa-box-archive"></i> 预设</div>
-                        <div class="nsk-tab" data-target="view-bindings"><i class="fa-solid fa-link"></i> 绑定</div>
                         <div class="nsk-tab" data-target="view-settings"><i class="fa-solid fa-sliders"></i> 设置</div>
                     </div>
 
@@ -1749,9 +1756,6 @@
                         <!-- Panel 2: 设置视图 -->
                         <div class="nsk-panel" id="view-settings">
                             ${createSettingsHTML(currentData)}
-                        </div>
-                        <div class="nsk-panel" id="view-bindings">
-                            ${createBindingsHTML(currentData)}
                         </div>
                         <div class="nsk-panel" id="view-presets">
                             ${createPresetsHTML(currentData)}
@@ -1998,11 +2002,6 @@
             bindSettingsEvents(); 
         };
 
-        const renderBindings = () => {
-            $popup.find('#view-bindings').html(createBindingsHTML(currentData));
-            bindBindingEvents();
-        };
-
         const renderPresets = () => {
             $popup.find('#view-presets').html(createPresetsHTML(currentData));
             bindPresetEvents();
@@ -2011,7 +2010,6 @@
         function refreshAllConfigurationViews() {
             renderRoleGrid(getActiveRole());
             renderSettings();
-            renderBindings();
             renderPresets();
         }
 
@@ -2021,6 +2019,9 @@
                 if (!name || !name.trim()) return;
                 currentData = await DataManager.load();
                 const preset = createPresetSnapshot(currentData, name.trim());
+                currentData.presets.forEach(item => {
+                    if (item.themeId === preset.themeId) item.isActive = false;
+                });
                 currentData.presets.push(preset);
                 currentData.activePresetId = preset.id;
                 await DataManager.save(currentData);
@@ -2033,13 +2034,16 @@
                 currentData = await DataManager.load();
                 const preset = currentData.presets.find(item => item.id === presetId);
                 if (!preset) return;
-                const isActive = preset.id === currentData.activePresetId && presetMatchesData(preset, currentData);
+                const isActive = preset.isActive && preset.id === currentData.activePresetId && presetMatchesData(preset, currentData);
                 if (isActive) {
                     const restore = await showAFMConfirmDialog({ title: '恢复头像框默认状态', message: '确定取消当前预设并清除 User、Char 头像框选择吗？设置页的全局位置数值不会改变。', okText: '恢复默认' });
                     if (!restore) return;
                     currentData.activeUserSrc = null;
                     currentData.activeCharSrc = null;
                     currentData.activePresetId = null;
+                    currentData.presets.forEach(item => {
+                        if (item.themeId === preset.themeId) item.isActive = false;
+                    });
                     await DataManager.save(currentData);
                     await applyInjectedCSS(currentData);
                     refreshAllConfigurationViews();
@@ -2052,6 +2056,9 @@
                 currentData.activeCharSrc = currentData.charFrames.some(frame => frame.src === preset.activeCharSrc) ? preset.activeCharSrc : null;
                 currentData.pseudoTarget = preset.pseudoTarget === 'before' ? 'before' : 'after';
                 currentData.activePresetId = preset.id;
+                currentData.presets.forEach(item => {
+                    if (item.themeId === preset.themeId) item.isActive = item.id === preset.id;
+                });
                 await DataManager.save(currentData);
                 await applyInjectedCSS(currentData);
                 refreshAllConfigurationViews();
@@ -2066,7 +2073,11 @@
                 const preset = currentData.presets[presetIndex];
                 const ok = await showAFMConfirmDialog({ title: '覆盖头像框预设', message: `确定用当前 User、Char 头像框选择覆盖“${preset.name}”吗？全局位置数值不会写入预设。`, okText: '保存覆盖' });
                 if (!ok) return;
-                currentData.presets[presetIndex] = createPresetSnapshot(currentData, preset.name, preset.id);
+                const replacement = createPresetSnapshot(currentData, preset.name, preset.id);
+                currentData.presets.forEach(item => {
+                    if (item.themeId === replacement.themeId) item.isActive = false;
+                });
+                currentData.presets[presetIndex] = replacement;
                 currentData.activePresetId = preset.id;
                 await DataManager.save(currentData);
                 renderPresets();
@@ -2101,62 +2112,7 @@
             });
         }
 
-        function bindBindingEvents() {
-            $popup.find('#afm-save-binding').on('click', async function() {
-                const activeTheme = getCurrentThemeSnapshot();
-                const themeId = String(activeTheme.id || '').trim();
-                const themeName = String(activeTheme.name || themeId).trim() || themeId;
-                currentData = await DataManager.load();
-                const userFrameSrc = String(currentData.activeUserSrc || '').trim();
-                const charFrameSrc = String(currentData.activeCharSrc || '').trim();
-                if (!themeId) {
-                    if (window.toastr) toastr.warning('未检测到当前美化，无法保存绑定');
-                    return;
-                }
-                if (!userFrameSrc && !charFrameSrc) {
-                    if (window.toastr) toastr.warning('当前 User 和 Char 都没有应用头像框，无法保存绑定');
-                    return;
-                }
-                currentData.themeBindings[themeId] = {
-                    themeId,
-                    themeName,
-                    userFrameSrc,
-                    charFrameSrc,
-                    updatedAt: Date.now()
-                };
-                if (activeTheme.id === themeId) {
-                    currentData.activeUserSrc = userFrameSrc || null;
-                    currentData.activeCharSrc = charFrameSrc || null;
-                }
-                await DataManager.save(currentData);
-                await applyInjectedCSS(currentData);
-                renderRoleGrid(getActiveRole());
-                renderSettings();
-                renderBindings();
-                if (window.toastr) toastr.success('美化绑定已保存');
-            });
-            $popup.find('#afm-delete-binding').on('click', async function() {
-                const themeId = String(getCurrentThemeSnapshot().id || '').trim();
-                if (!themeId || !currentData.themeBindings[themeId]) return;
-                const ok = await showAFMConfirmDialog({ title: '删除美化绑定', message: `确定删除“${themeId}”的美化绑定吗？`, okText: '删除', danger: true });
-                if (!ok) return;
-                currentData = await DataManager.load();
-                delete currentData.themeBindings[themeId];
-                if (getCurrentThemeSnapshot().id === themeId) {
-                    currentData.activeUserSrc = null;
-                    currentData.activeCharSrc = null;
-                }
-                await DataManager.save(currentData);
-                await applyInjectedCSS(currentData);
-                renderRoleGrid(getActiveRole());
-                renderSettings();
-                renderBindings();
-                if (window.toastr) toastr.success('美化绑定已删除');
-            });
-        }
-
         await refreshGrids();
-        bindBindingEvents();
         bindPresetEvents();
         themeBindingAppliedHandler = async event => {
             currentData = await DataManager.load();
@@ -2164,7 +2120,7 @@
             $popup.find('.nsk-current-theme strong').text(appliedTheme.name || appliedTheme.id || 'Default_Theme');
             renderRoleGrid(getActiveRole());
             renderSettings();
-            renderBindings();
+            renderPresets();
         };
         window.addEventListener('afm-theme-binding-applied', themeBindingAppliedHandler);
 
@@ -2453,7 +2409,7 @@
                         const deletedSrc = list[idx].src;
                         if (isUser && currentData.activeUserSrc === deletedSrc) currentData.activeUserSrc = null;
                         if (!isUser && currentData.activeCharSrc === deletedSrc) currentData.activeCharSrc = null;
-                        clearFrameFromThemeBindings(currentData, isUser ? 'user' : 'char', deletedSrc);
+                        clearFrameFromPresets(currentData, isUser ? 'user' : 'char', deletedSrc);
                         list.splice(idx, 1);
                     }
                 });
@@ -2461,7 +2417,7 @@
                 await applyInjectedCSS();
                 exitMultiMode();
                 await refreshGrids();
-                renderBindings();
+                renderPresets();
                 if (window.toastr) toastr.success(`成功删除 ${indicesArray.length} 个头像框`);
             }
         });
@@ -2513,11 +2469,11 @@
                 const deletedSrc = list[index].src;
                 if (isUser && currentData.activeUserSrc === deletedSrc) { currentData.activeUserSrc = null; await applyInjectedCSS(); }
                 if (!isUser && currentData.activeCharSrc === deletedSrc) { currentData.activeCharSrc = null; await applyInjectedCSS(); }
-                clearFrameFromThemeBindings(currentData, isUser ? 'user' : 'char', deletedSrc);
+                clearFrameFromPresets(currentData, isUser ? 'user' : 'char', deletedSrc);
                 list.splice(index, 1);
                 await DataManager.save(currentData);
                 await refreshGrids();
-                renderBindings();
+                renderPresets();
             }
         });
 
@@ -2530,7 +2486,6 @@
                 userSettings: currentData.userSettings,
                 charSettings: currentData.charSettings,
                 pseudoTarget: currentData.pseudoTarget,
-                themeBindings: currentData.themeBindings,
                 presets: currentData.presets,
                 activePresetId: currentData.activePresetId
             };
@@ -2588,10 +2543,9 @@
                 if (backup.userSettings) currentData.userSettings = { ...backup.userSettings };
                 if (backup.charSettings) currentData.charSettings = { ...backup.charSettings };
                 if (backup.pseudoTarget) currentData.pseudoTarget = backup.pseudoTarget;
-                if (backup.themeBindings) currentData.themeBindings = { ...currentData.themeBindings, ...normalizeThemeBindings(backup.themeBindings) };
-                if (backup.presets) {
+                if (backup.themeBindings || backup.presets) {
                     const knownPresetIds = new Set(currentData.presets.map(preset => preset.id));
-                    normalizePresets(backup.presets).forEach(preset => {
+                    normalizeFrameData({ presets: backup.presets, themeBindings: backup.themeBindings, pseudoTarget: backup.pseudoTarget }).presets.forEach(preset => {
                         if (!knownPresetIds.has(preset.id)) currentData.presets.push(preset);
                     });
                 }
@@ -2599,7 +2553,6 @@
                 await refreshGrids();
                 await applyInjectedCSS();
                 renderSettings();
-                renderBindings();
                 renderPresets();
                 if (window.toastr) toastr.success(`ZIP 备份导入完成，新增 ${added} 个头像框，并已恢复配置`);
             } catch (err) {
@@ -2640,10 +2593,9 @@
                         if (json.userSettings) currentData.userSettings = { ...json.userSettings };
                         if (json.charSettings) currentData.charSettings = { ...json.charSettings };
                         if (json.pseudoTarget) currentData.pseudoTarget = json.pseudoTarget;
-                        if (json.themeBindings) currentData.themeBindings = { ...currentData.themeBindings, ...normalizeThemeBindings(json.themeBindings) };
-                        if (json.presets) {
+                        if (json.themeBindings || json.presets) {
                             const knownPresetIds = new Set(currentData.presets.map(preset => preset.id));
-                            normalizePresets(json.presets).forEach(preset => {
+                            normalizeFrameData({ presets: json.presets, themeBindings: json.themeBindings, pseudoTarget: json.pseudoTarget }).presets.forEach(preset => {
                                 if (!knownPresetIds.has(preset.id)) currentData.presets.push(preset);
                             });
                         }
@@ -2658,7 +2610,6 @@
                         await refreshGrids();
                         await applyInjectedCSS(); 
                         renderSettings(); 
-                        renderBindings();
                         renderPresets();
                         if (window.toastr) toastr.success(`导入成功，新增 ${addedCount} 个`);
                     } else {
@@ -2679,18 +2630,18 @@
             if (ok) {
                 currentData = await DataManager.load();
                 if (isUser) {
-                    currentData.userFrames.forEach(frame => clearFrameFromThemeBindings(currentData, 'user', frame.src));
+                    currentData.userFrames.forEach(frame => clearFrameFromPresets(currentData, 'user', frame.src));
                     currentData.userFrames = [];
                     currentData.activeUserSrc = null;
                 } else {
-                    currentData.charFrames.forEach(frame => clearFrameFromThemeBindings(currentData, 'char', frame.src));
+                    currentData.charFrames.forEach(frame => clearFrameFromPresets(currentData, 'char', frame.src));
                     currentData.charFrames = [];
                     currentData.activeCharSrc = null;
                 }
                 await DataManager.save(currentData);
                 await applyInjectedCSS();
                 await refreshGrids();
-                renderBindings();
+                renderPresets();
                 if (isMultiMode) exitMultiMode();
                 if (window.toastr) toastr.success("列表已清空");
             }
@@ -2742,7 +2693,7 @@
                     await DataManager.save(currentData);
                     renderRoleGrid(getActiveRole());
                     refreshControls();
-                    renderBindings();
+                    renderPresets();
                     const targetText = importPlan.roles.map(getRoleLabel).join(' + ');
                     if (window.toastr) toastr.success(`成功导入 ${addedCount} 条头像框记录到 ${targetText}`);
                 } else if (window.toastr) toastr.warning('所选图片已存在，未新增数据');

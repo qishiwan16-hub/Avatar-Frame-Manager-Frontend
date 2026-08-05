@@ -14,17 +14,13 @@
 
 ## 头像框预设
 
-“预设”页只保存当前 User、Char 头像框和伪元素选择。预设列表提供切换、保存覆盖、修改名称和删除操作；当前使用的预设会显示绿色指示灯。设置页的 User、Char 位置数值为全局固定值，不会被预设切换或覆盖保存修改；旧版本预设中的专用数值会在首次读取时自动清除。
+“预设”页按当前 CSS 美化分别保存 User、Char 头像框和伪元素选择，逻辑与主题一键换图一致。保存新预设或覆盖保存后，该预设会成为当前美化的启用预设；切换美化时自动加载对应的启用预设，没有启用预设时自动清空 User、Char 选择。预设列表提供切换、保存覆盖、修改名称和删除操作，当前使用的预设显示绿色指示灯，再次点击“默认”会恢复未选择状态。
 
-## 美化绑定
-
-在头像框管理器中打开“绑定”页，可为酒馆“UI Theme”里的 CSS 美化主题保存 User、Char 任一侧或两侧头像框。扩展使用与主题一键换图一致的当前主题识别逻辑，同时监听 `#themes`、`#theme`、主题链接和 `settings.visual_theme`。切换到没有绑定的美化时会自动清空 User、Char 选择，切回已绑定美化时恢复对应头像框；设置页的 User、Char 位置数值始终使用同一套全局值，不跟随主题变化。预设当前项再次点击“默认”会清除头像框选择；管理器标题下方会实时显示当前主题。
+设置页的 User、Char 位置数值为全局固定值，不会写入预设。旧版本的美化绑定会在首次读取时自动合并到对应美化的预设中；已有相同头像框组合的预设会直接复用，不重复保存。
 
 ## 后端存储
 
-本扩展支持酒馆服务器插件 [`Avatar-Frame-Manager-Backend`](https://github.com/qishiwan16-hub/Avatar-Frame-Manager-Backend)。安装后端并开启 `enableServerPlugins` 后，扩展会自动检测 `/api/plugins/avatar-frame-manager`：头像框配置和绑定保存在服务器，图片按内容哈希去重；后端不可用时自动回退到浏览器 IndexedDB。首次检测到空后端时，会自动迁移现有本地数据。
-
-美化绑定使用当前账户 `data/<账户>/themes/*.json` 的文件名作为主题 ID，并与酒馆顶部 `#themes` 选择器保持一致。
+本扩展支持酒馆服务器插件 [`Avatar-Frame-Manager-Backend`](https://github.com/qishiwan16-hub/Avatar-Frame-Manager-Backend)。安装后端并开启 `enableServerPlugins` 后，扩展会自动检测 `/api/plugins/avatar-frame-manager`：头像框配置和按美化保存的预设保存在服务器，图片按内容哈希去重；后端不可用时自动回退到浏览器 IndexedDB。首次检测到空后端时，会自动迁移现有本地数据。
 
 ## GIF ZIP 批量导入
 
