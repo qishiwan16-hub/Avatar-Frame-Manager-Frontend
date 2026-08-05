@@ -667,6 +667,7 @@
         const cssUrl = (src) => `url("${String(src || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`;
         const getRule = (settings) => `
             content: "";
+            display: block !important;
             background-size: contain !important;
             background-repeat: no-repeat !important;
             background-position: center !important;
@@ -679,18 +680,27 @@
             z-index: 10 !important;
         `;
 
-        if (data.activeUserSrc) css += `\n.mes[is_user="true"] .avatar::${pseudo} { background-image: ${cssUrl(data.activeUserSrc)} !important; ${getRule(u)} }`;
+        const addFrameRules = (selectors, source, settings) => {
+            if (!source) return;
+            const rule = `background-image: ${cssUrl(source)} !important; ${getRule(settings)}`;
+            selectors.forEach(selector => {
+                css += `\n${selector} { position: relative !important; }`;
+                css += `\n${selector}::${pseudo} { ${rule} }`;
+            });
+        };
+
+        addFrameRules([
+            '.mes[is_user="true"] .avatar',
+            '.mes[is_user="true"] .avatar-container .avatar'
+        ], data.activeUserSrc, u);
         // Via 浏览器的 WebView 对 :not([attr=...]) + 伪元素组合选择器兼容性较差，
         // 会导致整条 char 规则失效；拆成多条简单选择器，并保留原版的精确选择器作为第一条。
-        if (data.activeCharSrc) {
-            const charRule = `background-image: ${cssUrl(data.activeCharSrc)} !important; ${getRule(c)}`;
-            css += `
-.mes[is_user="false"] .avatar::${pseudo} { ${charRule} }`;
-            css += `
-.mes:not([is_user="true"]) .avatar::${pseudo} { ${charRule} }`;
-            css += `
-.mes:not([is_user]) .avatar::${pseudo} { ${charRule} }`;
-        }
+        addFrameRules([
+            '.mes[is_user="false"] .avatar',
+            '.mes:not([is_user="true"]) .avatar',
+            '.mes:not([is_user]) .avatar',
+            '.mes:not([is_user="true"]) .avatar-container .avatar'
+        ], data.activeCharSrc, c);
 
         if (css) $('head').append(`<style id="${APPLIED_STYLE_ID}">${css}</style>`);
     }
@@ -2090,7 +2100,8 @@
         // 卡片点击逻辑
         $popup.on('click', '.afm-card', async function(e) {
             const $card = $(this);
-            const index = parseInt($card.attr('data-index'));
+            const index = Number.parseInt($card.attr('data-index'), 10);
+            if (!Number.isInteger(index) || index < 0) return;
 
             if (isMultiMode) {
                 if (selectedIndices.has(index)) {
@@ -2108,16 +2119,17 @@
 
             const $grid = $card.closest('.afm-grid');
             const isUser = $grid.attr('id') === 'grid-user';
-            const imgSrc = $card.find('img').attr('src');
-            
             $grid.find('.afm-card').removeClass('active');
             $card.addClass('active');
 
             currentData = await DataManager.load();
             const list = isUser ? currentData.userFrames : currentData.charFrames;
-            const frameName = (list[index] && list[index].name) ? list[index].name : '未命名头像框';
-            if (isUser) currentData.activeUserSrc = imgSrc;
-            else currentData.activeCharSrc = imgSrc;
+            const selectedFrame = list[index];
+            if (!selectedFrame || !selectedFrame.src) return;
+            const frameSrc = String(selectedFrame.src);
+            const frameName = selectedFrame.name ? selectedFrame.name : '未命名头像框';
+            if (isUser) currentData.activeUserSrc = frameSrc;
+            else currentData.activeCharSrc = frameSrc;
             await DataManager.save(currentData);
             await applyInjectedCSS(currentData);
             if (window.toastr) toastr.success(`已更换${isUser ? 'user' : 'char'}头像框为${frameName}`);
