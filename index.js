@@ -655,44 +655,9 @@
     // ===========================
     // 2. 核心 CSS 注入逻辑
     // ===========================
-    let appliedFrameCSS = '';
-    let appliedFrameStyleObserver = null;
-    let appliedFrameStyleTimer = null;
-    let replacingAppliedFrameStyle = false;
-
-    function mountAppliedFrameStyle(css) {
-        appliedFrameCSS = css || '';
-        replacingAppliedFrameStyle = true;
-        document.querySelectorAll(`style#${APPLIED_STYLE_ID}`).forEach(style => style.remove());
-        if (appliedFrameCSS && document.head) {
-            const style = document.createElement('style');
-            style.id = APPLIED_STYLE_ID;
-            style.textContent = appliedFrameCSS;
-            document.head.appendChild(style);
-        }
-        replacingAppliedFrameStyle = false;
-    }
-
-    function installAppliedFrameStyleObserver() {
-        if (appliedFrameStyleObserver || typeof MutationObserver !== 'function' || !document.head) return;
-        appliedFrameStyleObserver = new MutationObserver(records => {
-            if (replacingAppliedFrameStyle || !appliedFrameCSS) return;
-            const changed = records.some(record => {
-                if (record.type === 'characterData') return record.target.parentElement?.id !== APPLIED_STYLE_ID;
-                return Array.from(record.addedNodes || []).concat(Array.from(record.removedNodes || [])).some(node => {
-                    if (node.nodeType !== 1 || node.id === APPLIED_STYLE_ID) return false;
-                    return node.tagName === 'STYLE' || node.tagName === 'LINK' || !!node.querySelector?.('style, link');
-                });
-            });
-            if (!changed) return;
-            if (appliedFrameStyleTimer) clearTimeout(appliedFrameStyleTimer);
-            appliedFrameStyleTimer = setTimeout(() => mountAppliedFrameStyle(appliedFrameCSS), 40);
-        });
-        appliedFrameStyleObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
-    }
-
     async function applyInjectedCSS(sourceData = null) {
         const data = normalizeFrameData(sourceData || await DataManager.load());
+        $(`#${APPLIED_STYLE_ID}`).remove();
         let css = '';
 
         const u = data.userSettings;
@@ -700,16 +665,11 @@
         const pseudo = data.pseudoTarget || 'after';
 
         const cssUrl = (src) => `url("${String(src || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`;
-        const getBackgroundRule = (src) => `background: transparent ${cssUrl(src)} center / contain no-repeat !important; background-image: ${cssUrl(src)} !important;`;
         const getRule = (settings) => `
-            content: "" !important;
-            background-color: transparent !important;
+            content: "";
             background-size: contain !important;
             background-repeat: no-repeat !important;
             background-position: center !important;
-            border: 0 !important;
-            box-shadow: none !important;
-            filter: none !important;
             position: absolute !important;
             top: ${settings.top}% !important;
             left: ${settings.left}% !important;
@@ -719,11 +679,11 @@
             z-index: 10 !important;
         `;
 
-        if (data.activeUserSrc) css += `\n.mes[is_user="true"] .avatar::${pseudo} { ${getBackgroundRule(data.activeUserSrc)} ${getRule(u)} }`;
+        if (data.activeUserSrc) css += `\n.mes[is_user="true"] .avatar::${pseudo} { background-image: ${cssUrl(data.activeUserSrc)} !important; ${getRule(u)} }`;
         // Via 浏览器的 WebView 对 :not([attr=...]) + 伪元素组合选择器兼容性较差，
         // 会导致整条 char 规则失效；拆成多条简单选择器，并保留原版的精确选择器作为第一条。
         if (data.activeCharSrc) {
-            const charRule = `${getBackgroundRule(data.activeCharSrc)} ${getRule(c)}`;
+            const charRule = `background-image: ${cssUrl(data.activeCharSrc)} !important; ${getRule(c)}`;
             css += `
 .mes[is_user="false"] .avatar::${pseudo} { ${charRule} }`;
             css += `
@@ -732,8 +692,7 @@
 .mes:not([is_user]) .avatar::${pseudo} { ${charRule} }`;
         }
 
-        mountAppliedFrameStyle(css);
-        installAppliedFrameStyleObserver();
+        if (css) $('head').append(`<style id="${APPLIED_STYLE_ID}">${css}</style>`);
     }
 
     let lastThemeBindingId = null;
@@ -2568,15 +2527,11 @@
         if (window.__afmMenuWatcherTimer) clearInterval(window.__afmMenuWatcherTimer);
         if (window.__afmThemeBindingWatcherTimer) clearInterval(window.__afmThemeBindingWatcherTimer);
         if (window.__afmThemeBindingDebounceTimer) clearTimeout(window.__afmThemeBindingDebounceTimer);
-        if (appliedFrameStyleTimer) clearTimeout(appliedFrameStyleTimer);
-        if (appliedFrameStyleObserver) appliedFrameStyleObserver.disconnect();
-        appliedFrameStyleObserver = null;
-        appliedFrameCSS = '';
         $('#themes').removeData('afm-theme-watcher-bound').off('change.afmThemeBinding');
         $('.nsk-overlay').remove();
         $(`#${MENU_BTN_ID}`).remove();
         $(`#${STYLE_ID}`).remove();
-        document.querySelectorAll(`style#${APPLIED_STYLE_ID}`).forEach(style => style.remove());
+        $(`#${APPLIED_STYLE_ID}`).remove();
     };
 
 })();
