@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.9.3';
+    const SCRIPT_VERSION = '2.9.4';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -880,10 +880,25 @@
                 if (response.ok) return { data: await response.json(), extensionName, global };
                 const text = await response.text();
                 lastError = text || response.statusText || lastError;
-                if (response.status !== 404) break;
             }
         }
         throw new Error(lastError);
+    }
+
+    function compareVersions(left, right) {
+        const parse = value => String(value || '')
+            .trim()
+            .replace(/^v/i, '')
+            .split(/[.+-]/)
+            .map(part => Number.parseInt(part, 10) || 0);
+        const leftParts = parse(left);
+        const rightParts = parse(right);
+        const length = Math.max(leftParts.length, rightParts.length);
+        for (let index = 0; index < length; index += 1) {
+            const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
+            if (difference !== 0) return difference > 0 ? 1 : -1;
+        }
+        return 0;
     }
 
     async function getLatestManifestVersion() {
@@ -901,20 +916,23 @@
         extensionUpdateState.phase = 'checking';
         extensionUpdateState.message = '正在检查 GitHub 更新...';
         extensionUpdateState.canUpdate = false;
+        extensionUpdateState.latestVersion = await getLatestManifestVersion();
+        const githubHasUpdate = compareVersions(extensionUpdateState.latestVersion, SCRIPT_VERSION) > 0;
         try {
             const result = await requestExtensionApi('version');
             extensionUpdateState.extensionName = result.extensionName;
             extensionUpdateState.global = result.global;
-            extensionUpdateState.latestVersion = await getLatestManifestVersion();
-            extensionUpdateState.canUpdate = result.data.isUpToDate === false;
+            extensionUpdateState.canUpdate = githubHasUpdate || result.data.isUpToDate === false;
             extensionUpdateState.phase = extensionUpdateState.canUpdate ? 'available' : 'latest';
             extensionUpdateState.message = extensionUpdateState.canUpdate
                 ? `发现新版本${extensionUpdateState.latestVersion ? ` v${extensionUpdateState.latestVersion}` : ''}`
                 : `当前已是最新版本 v${SCRIPT_VERSION}`;
         } catch (error) {
-            extensionUpdateState.phase = 'error';
-            extensionUpdateState.message = `检查失败：${error.message || error}`;
-            extensionUpdateState.canUpdate = false;
+            extensionUpdateState.canUpdate = githubHasUpdate;
+            extensionUpdateState.phase = githubHasUpdate ? 'available' : 'error';
+            extensionUpdateState.message = githubHasUpdate
+                ? `发现新版本 v${extensionUpdateState.latestVersion}（酒馆更新接口暂时不可用）`
+                : `检查失败：${error.message || error}`;
         }
     }
 
@@ -987,8 +1005,15 @@
                 global: extensionUpdateState.global
             });
             if (result.data.isUpToDate) {
-                extensionUpdateState.phase = 'latest';
-                extensionUpdateState.message = `当前已是最新版本 v${SCRIPT_VERSION}`;
+                const remoteVersion = extensionUpdateState.latestVersion || await getLatestManifestVersion();
+                if (compareVersions(remoteVersion, SCRIPT_VERSION) > 0) {
+                    extensionUpdateState.phase = 'error';
+                    extensionUpdateState.canUpdate = true;
+                    extensionUpdateState.message = `GitHub 已有 v${remoteVersion}，但酒馆后端没有拉取。请确认本扩展通过 GitHub 安装且目录内保留 .git，然后重启酒馆后再更新。`;
+                } else {
+                    extensionUpdateState.phase = 'latest';
+                    extensionUpdateState.message = `当前已是最新版本 v${SCRIPT_VERSION}`;
+                }
                 return;
             }
         } catch (error) {
