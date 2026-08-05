@@ -663,8 +663,7 @@
     function mountAppliedFrameStyle(css) {
         appliedFrameCSS = css || '';
         replacingAppliedFrameStyle = true;
-        const existing = document.getElementById(APPLIED_STYLE_ID);
-        if (existing) existing.remove();
+        document.querySelectorAll(`style#${APPLIED_STYLE_ID}`).forEach(style => style.remove());
         if (appliedFrameCSS && document.head) {
             const style = document.createElement('style');
             style.id = APPLIED_STYLE_ID;
@@ -2577,7 +2576,7 @@
         $('.nsk-overlay').remove();
         $(`#${MENU_BTN_ID}`).remove();
         $(`#${STYLE_ID}`).remove();
-        $(`#${APPLIED_STYLE_ID}`).remove();
+        document.querySelectorAll(`style#${APPLIED_STYLE_ID}`).forEach(style => style.remove());
     };
 
 })();
