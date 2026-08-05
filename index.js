@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.6.1';
+    const SCRIPT_VERSION = '2.7.0';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -731,6 +731,8 @@
     }
 
     let lastThemeBindingId = null;
+    let pendingThemeBindingId = null;
+    let themeBindingWatcherInitialized = false;
     let themeBindingSyncPromise = Promise.resolve();
 
     function bindingSettingsEqual(left, right) {
@@ -739,9 +741,10 @@
         return ['top', 'left', 'width', 'height'].every(key => Number(a[key]) === Number(b[key]));
     }
 
-    async function syncThemeBinding(force = false) {
+    async function syncThemeBinding() {
         const theme = getCurrentThemeSnapshot();
-        if (!theme.id || (!force && theme.id === lastThemeBindingId)) return;
+        if (!theme.id || theme.id === lastThemeBindingId || theme.id === pendingThemeBindingId) return;
+        pendingThemeBindingId = theme.id;
         lastThemeBindingId = theme.id;
         themeBindingSyncPromise = themeBindingSyncPromise.then(async () => {
             const data = await DataManager.load();
@@ -764,20 +767,40 @@
             }
             await applyInjectedCSS(data);
             if (typeof window.CustomEvent === 'function') window.dispatchEvent(new CustomEvent('afm-theme-binding-applied', { detail: theme }));
-        }).catch(error => console.warn('[头像框管理器] 美化绑定同步失败', error));
+        }).catch(error => console.warn('[头像框管理器] 美化绑定同步失败', error)).finally(() => {
+            pendingThemeBindingId = null;
+        });
         return themeBindingSyncPromise;
     }
 
     function installThemeBindingWatcher() {
         if (window.__afmThemeBindingWatcherTimer) clearInterval(window.__afmThemeBindingWatcherTimer);
-        window.__afmThemeBindingWatcherTimer = setInterval(() => syncThemeBinding(false), 1200);
-        $('#themes').off('change.afmThemeBinding').on('change.afmThemeBinding', () => syncThemeBinding(true));
-        const context = getSillyTavernContext();
-        const source = context.eventSource || window.eventSource;
-        const types = context.eventTypes || context.event_types || window.event_types || {};
-        const eventNames = Array.from(new Set([types.SETTINGS_UPDATED].filter(Boolean)));
-        if (source && typeof source.on === 'function') eventNames.forEach(name => source.on(name, () => syncThemeBinding(true)));
-        syncThemeBinding(true);
+        if (window.__afmThemeBindingDebounceTimer) clearTimeout(window.__afmThemeBindingDebounceTimer);
+        const scheduleSync = () => {
+            const expectedThemeId = getCurrentThemeSnapshot().id;
+            if (!expectedThemeId) return;
+            if (!themeBindingWatcherInitialized) {
+                lastThemeBindingId = expectedThemeId;
+                themeBindingWatcherInitialized = true;
+                return;
+            }
+            if (expectedThemeId === lastThemeBindingId) return;
+            if (window.__afmThemeBindingDebounceTimer) clearTimeout(window.__afmThemeBindingDebounceTimer);
+            window.__afmThemeBindingDebounceTimer = setTimeout(() => {
+                const stableThemeId = getCurrentThemeSnapshot().id;
+                if (stableThemeId === expectedThemeId && stableThemeId !== lastThemeBindingId) syncThemeBinding();
+            }, 350);
+        };
+        const bindThemeSelector = () => {
+            const $themes = $('#themes').first();
+            if (!$themes.length) return;
+            if (!$themes.data('afm-theme-watcher-bound')) {
+                $themes.data('afm-theme-watcher-bound', true).off('change.afmThemeBinding').on('change.afmThemeBinding', scheduleSync);
+            }
+            if (!themeBindingWatcherInitialized) scheduleSync();
+        };
+        bindThemeSelector();
+        window.__afmThemeBindingWatcherTimer = setInterval(bindThemeSelector, 1200);
     }
 
     const EXTENSION_RAW_MANIFEST_URL = 'https://raw.githubusercontent.com/qishiwan16-hub/Avatar-Frame-Manager-Frontend/main/manifest.json';
@@ -1037,7 +1060,6 @@
             .nsk-overlay.afm-dark-mode .afm-modal-input,
             .nsk-overlay.afm-dark-mode .afm-modal-select,
             .nsk-overlay.afm-dark-mode .afm-binding-select,
-            .nsk-overlay.afm-dark-mode .afm-binding-num-input,
             .nsk-overlay.afm-dark-mode .afm-import-name-input {
                 background: rgba(0,0,0,0.42); border-color: rgba(255,255,255,0.15); color: #eee;
             }
@@ -1267,8 +1289,6 @@
             .afm-binding-field { margin-bottom: 12px; }
             .afm-binding-field-label { display: block; margin-bottom: 5px; font-size: 0.82em; opacity: 0.7; }
             .afm-binding-select { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; border: 1px solid rgba(0,0,0,0.12); border-radius: 8px; background: rgba(255,255,255,0.72); color: inherit; }
-            .afm-binding-slider { flex: 1; margin: 0 10px !important; cursor: pointer; accent-color: var(--SmartThemeQuoteColor); }
-            .afm-binding-num-input { width: 50px; text-align: center; border: 1px solid rgba(0,0,0,0.1); border-radius: 8px; padding: 4px; font-size: 0.9em; background: rgba(255,255,255,0.8); color: inherit; }
             .afm-binding-actions { display: flex; gap: 8px; margin-top: 14px; }
             .afm-binding-action { min-height: 34px; padding: 7px 13px; border: 1px solid rgba(0,0,0,0.12); border-radius: 8px; background: rgba(255,255,255,0.62); color: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
             .afm-binding-action.primary { flex: 1; border-color: var(--SmartThemeQuoteColor); background: var(--SmartThemeQuoteColor); color: white; }
@@ -1479,21 +1499,12 @@
         const bindings = Object.values(data.themeBindings || {}).sort((a, b) => a.themeName.localeCompare(b.themeName, 'zh-Hans-CN'));
         const selectedId = String(selectedThemeId || currentTheme.id || options[0]?.id || bindings[0]?.themeId || '').trim();
         const selectedBinding = data.themeBindings[selectedId] || null;
-        const userSettings = selectedBinding ? selectedBinding.userSettings : data.userSettings;
-        const charSettings = selectedBinding ? selectedBinding.charSettings : data.charSettings;
-        const selectedUserFrame = selectedBinding ? selectedBinding.userFrameSrc : '';
-        const selectedCharFrame = selectedBinding ? selectedBinding.charFrameSrc : '';
-        const createFrameOptions = (frames, selectedSrc) => [
-            '<option value="">不绑定（切换时清除）</option>',
-            ...(frames || []).map(frame => `<option value="${escapeHTML(frame.src)}" ${frame.src === selectedSrc ? 'selected' : ''}>${escapeHTML(frame.name || '未命名头像框')}</option>`)
-        ].join('');
-        const createBindingSlider = (label, key, value, group) => `
-            <div class="afm-control-row">
-                <div class="afm-control-label">${label}</div>
-                <input type="range" class="afm-binding-slider" data-binding-group="${group}" data-key="${key}" value="${value}" min="${key === 'width' || key === 'height' ? 0 : -100}" max="${key === 'width' || key === 'height' ? 300 : 200}">
-                <input type="number" class="afm-binding-num-input" data-binding-group="${group}" data-key="${key}" value="${value}">
-            </div>
-        `;
+        const currentUserFrame = data.userFrames.find(frame => frame.src === data.activeUserSrc);
+        const currentCharFrame = data.charFrames.find(frame => frame.src === data.activeCharSrc);
+        const formatSettings = settings => {
+            const value = normalizeBindingSettings(settings);
+            return `Top ${value.top}% / Left ${value.left}% / 宽 ${value.width}% / 高 ${value.height}%`;
+        };
         const renderThumb = (src, role) => src ? `<img class="afm-binding-thumb" src="${escapeHTML(src)}" alt="${role}">` : `<div class="afm-binding-thumb-empty">${role}</div>`;
         const bindingItems = bindings.length ? bindings.map(binding => `
             <div class="afm-binding-item ${binding.themeId === selectedId ? 'active' : ''}" data-theme-id="${escapeHTML(binding.themeId)}">
@@ -1525,24 +1536,11 @@
                         <label class="afm-binding-field-label" for="afm-binding-theme-id">美化标识</label>
                         <input id="afm-binding-theme-id" class="afm-binding-select" type="text" value="${escapeHTML(selectedId)}" placeholder="输入美化 ID">
                     </div>
-                    <div class="afm-binding-field">
-                        <label class="afm-binding-field-label" for="afm-binding-user-frame">User 头像框</label>
-                        <select id="afm-binding-user-frame" class="afm-binding-select">${createFrameOptions(data.userFrames, selectedUserFrame)}</select>
+                    <div class="afm-binding-current">
+                        <strong>保存时直接读取当前配置</strong>
+                        <code>User：${escapeHTML(currentUserFrame ? currentUserFrame.name : '未选择')} · ${escapeHTML(formatSettings(data.userSettings))}</code>
+                        <code>Char：${escapeHTML(currentCharFrame ? currentCharFrame.name : '未选择')} · ${escapeHTML(formatSettings(data.charSettings))}</code>
                     </div>
-                    <div class="afm-binding-field">
-                        <label class="afm-binding-field-label" for="afm-binding-char-frame">Char 头像框</label>
-                        <select id="afm-binding-char-frame" class="afm-binding-select">${createFrameOptions(data.charFrames, selectedCharFrame)}</select>
-                    </div>
-                    <div class="afm-binding-settings-title">User 定位数值 (%)</div>
-                    ${createBindingSlider('Top', 'top', userSettings.top, 'user')}
-                    ${createBindingSlider('Left', 'left', userSettings.left, 'user')}
-                    ${createBindingSlider('宽', 'width', userSettings.width, 'user')}
-                    ${createBindingSlider('高', 'height', userSettings.height, 'user')}
-                    <div class="afm-binding-settings-title">Char 定位数值 (%)</div>
-                    ${createBindingSlider('Top', 'top', charSettings.top, 'char')}
-                    ${createBindingSlider('Left', 'left', charSettings.left, 'char')}
-                    ${createBindingSlider('宽', 'width', charSettings.width, 'char')}
-                    ${createBindingSlider('高', 'height', charSettings.height, 'char')}
                     <div class="afm-binding-actions">
                         <button class="afm-binding-action primary" id="afm-save-binding" type="button"><i class="fa-solid fa-floppy-disk"></i> 保存绑定</button>
                         <button class="afm-binding-action danger" id="afm-delete-binding" type="button" ${selectedBinding ? '' : 'disabled'}><i class="fa-solid fa-trash-can"></i> 删除</button>
@@ -1894,16 +1892,6 @@
             bindBindingEvents();
         };
 
-        function readBindingSettings(group) {
-            const settings = { ...DEFAULT_CONFIG };
-            ['top', 'left', 'width', 'height'].forEach(key => {
-                const raw = $popup.find(`.afm-binding-num-input[data-binding-group="${group}"][data-key="${key}"]`).val();
-                const value = Number(raw);
-                if (Number.isFinite(value)) settings[key] = value;
-            });
-            return settings;
-        }
-
         function bindBindingEvents() {
             $popup.find('#afm-binding-theme-select').on('change', function() {
                 selectedBindingThemeId = String($(this).val() || '').trim();
@@ -1913,13 +1901,6 @@
                 currentData = await DataManager.load();
                 await refreshThemeFolderOptions();
                 renderBindings();
-            });
-            $popup.find('.afm-binding-slider, .afm-binding-num-input').on('input', function() {
-                const group = $(this).data('binding-group');
-                const key = $(this).data('key');
-                const value = Number($(this).val());
-                if (!Number.isFinite(value)) return;
-                $popup.find(`.afm-binding-slider[data-binding-group="${group}"][data-key="${key}"], .afm-binding-num-input[data-binding-group="${group}"][data-key="${key}"]`).not(this).val(value);
             });
             $popup.find('.afm-binding-item').on('click', function(e) {
                 if ($(e.target).closest('.afm-binding-edit').length) return;
@@ -1935,24 +1916,24 @@
                 const themeId = String($popup.find('#afm-binding-theme-id').val() || '').trim();
                 const selectedOptionId = String($popup.find('#afm-binding-theme-select').val() || '').trim();
                 const themeName = selectedOptionId === themeId ? String($popup.find('#afm-binding-theme-select option:selected').text() || themeId).split(' · ')[0].trim() : themeId;
-                const userFrameSrc = String($popup.find('#afm-binding-user-frame').val() || '').trim();
-                const charFrameSrc = String($popup.find('#afm-binding-char-frame').val() || '').trim();
+                currentData = await DataManager.load();
+                const userFrameSrc = String(currentData.activeUserSrc || '').trim();
+                const charFrameSrc = String(currentData.activeCharSrc || '').trim();
                 if (!themeId) {
                     if (window.toastr) toastr.warning('请先选择或输入美化标识');
                     return;
                 }
                 if (!userFrameSrc && !charFrameSrc) {
-                    if (window.toastr) toastr.warning('User 或 Char 至少选择一个头像框');
+                    if (window.toastr) toastr.warning('当前 User 和 Char 都没有应用头像框，无法保存绑定');
                     return;
                 }
-                currentData = await DataManager.load();
                 currentData.themeBindings[themeId] = {
                     themeId,
                     themeName,
                     userFrameSrc,
                     charFrameSrc,
-                    userSettings: readBindingSettings('user'),
-                    charSettings: readBindingSettings('char'),
+                    userSettings: normalizeBindingSettings(currentData.userSettings),
+                    charSettings: normalizeBindingSettings(currentData.charSettings),
                     updatedAt: Date.now()
                 };
                 selectedBindingThemeId = themeId;
@@ -2619,6 +2600,8 @@
     window.__afmHotCleanup = () => {
         if (window.__afmMenuWatcherTimer) clearInterval(window.__afmMenuWatcherTimer);
         if (window.__afmThemeBindingWatcherTimer) clearInterval(window.__afmThemeBindingWatcherTimer);
+        if (window.__afmThemeBindingDebounceTimer) clearTimeout(window.__afmThemeBindingDebounceTimer);
+        $('#themes').removeData('afm-theme-watcher-bound').off('change.afmThemeBinding');
         $('.nsk-overlay').remove();
         $(`#${MENU_BTN_ID}`).remove();
         $(`#${STYLE_ID}`).remove();
