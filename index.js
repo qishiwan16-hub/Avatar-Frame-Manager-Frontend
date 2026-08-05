@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.9.1';
+    const SCRIPT_VERSION = '2.9.2';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -1342,7 +1342,8 @@
             .afm-preset-actions { display: flex; align-items: center; gap: 5px; }
             .afm-preset-switch, .afm-preset-save { min-height: 30px; padding: 5px 9px; border: 1px solid var(--SmartThemeQuoteColor); border-radius: 7px; background: transparent; color: var(--SmartThemeQuoteColor); cursor: pointer; }
             .afm-preset-switch:hover, .afm-preset-save:hover { background: var(--SmartThemeQuoteColor); color: white; }
-            .afm-preset-switch:disabled { border-color: #35a85b; background: rgba(53,168,91,0.12); color: #35a85b; cursor: default; }
+            .afm-preset-switch.active { border-color: #35a85b; background: rgba(53,168,91,0.12); color: #35a85b; }
+            .afm-preset-switch.active:hover { background: #35a85b; color: white; }
             .afm-preset-icon { width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: inherit; cursor: pointer; opacity: 0.6; }
             .afm-preset-icon:hover { opacity: 1; background: rgba(0,0,0,0.06); color: var(--SmartThemeQuoteColor); }
             .afm-preset-icon.danger:hover { color: #d65353; }
@@ -1599,7 +1600,7 @@
                         <div class="afm-preset-meta">User：${escapeHTML(getFrameName('user', preset.activeUserSrc))} · Char：${escapeHTML(getFrameName('char', preset.activeCharSrc))}</div>
                     </div>
                     <div class="afm-preset-actions">
-                        <button class="afm-preset-switch" type="button" ${isActive ? 'disabled' : ''}><i class="fa-solid fa-repeat"></i> ${isActive ? '当前' : '切换'}</button>
+                        <button class="afm-preset-switch ${isActive ? 'active' : ''}" type="button"><i class="fa-solid ${isActive ? 'fa-rotate-left' : 'fa-repeat'}"></i> ${isActive ? '默认' : '切换'}</button>
                         <button class="afm-preset-save" type="button" title="用当前配置覆盖此预设"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
                         <button class="afm-preset-icon rename" type="button" title="修改名称"><i class="fa-solid fa-pencil"></i></button>
                         <button class="afm-preset-icon danger delete" type="button" title="删除"><i class="fa-solid fa-trash-can"></i></button>
@@ -1995,6 +1996,19 @@
                 currentData = await DataManager.load();
                 const preset = currentData.presets.find(item => item.id === presetId);
                 if (!preset) return;
+                const isActive = preset.id === currentData.activePresetId && presetMatchesData(preset, currentData);
+                if (isActive) {
+                    const restore = await showAFMConfirmDialog({ title: '恢复头像框默认状态', message: '确定取消当前预设并清除 User、Char 头像框选择吗？设置页的全局位置数值不会改变。', okText: '恢复默认' });
+                    if (!restore) return;
+                    currentData.activeUserSrc = null;
+                    currentData.activeCharSrc = null;
+                    currentData.activePresetId = null;
+                    await DataManager.save(currentData);
+                    await applyInjectedCSS(currentData);
+                    refreshAllConfigurationViews();
+                    if (window.toastr) toastr.success('已恢复头像框默认状态');
+                    return;
+                }
                 const ok = await showAFMConfirmDialog({ title: '切换头像框预设', message: `确定切换为“${preset.name}”吗？只会切换头像框选择，不会修改全局位置数值。`, okText: '切换' });
                 if (!ok) return;
                 currentData.activeUserSrc = currentData.userFrames.some(frame => frame.src === preset.activeUserSrc) ? preset.activeUserSrc : null;
