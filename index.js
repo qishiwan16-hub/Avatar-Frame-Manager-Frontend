@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.9.2';
+    const SCRIPT_VERSION = '2.9.3';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -94,6 +94,15 @@
         return (preset.activeUserSrc || null) === (data.activeUserSrc || null) &&
             (preset.activeCharSrc || null) === (data.activeCharSrc || null) &&
             (preset.pseudoTarget || 'after') === (data.pseudoTarget || 'after');
+    }
+
+    function hasLegacyScopedPositionSettings(data) {
+        const hasSettings = value => value && typeof value === 'object' &&
+            (Object.prototype.hasOwnProperty.call(value, 'userSettings') ||
+             Object.prototype.hasOwnProperty.call(value, 'charSettings') ||
+             Object.prototype.hasOwnProperty.call(value, 'settings'));
+        return Object.values(data?.themeBindings || {}).some(hasSettings) ||
+            (Array.isArray(data?.presets) && data.presets.some(hasSettings));
     }
 
     function clearFrameFromThemeBindings(data, role, frameSrc) {
@@ -297,8 +306,9 @@
                 };
                 shouldPersist = true;
             }
+            const needsMigration = hasLegacyScopedPositionSettings(data);
             data = normalizeFrameData(data);
-            if (shouldPersist) await this.save(data);
+            if (shouldPersist || needsMigration) await this.save(data);
             return data;
         },
         save: async function(data) {
@@ -336,6 +346,7 @@
         _loadServer: async function() {
             const result = await requestBackend('/data');
             if (!result || !result.ok) throw new Error('头像框后端返回了无效数据');
+            const needsMigration = hasLegacyScopedPositionSettings(result.data);
             let data = normalizeFrameData(result.data);
             const pendingSync = localStorage.getItem(BACKEND_PENDING_SYNC_KEY) === '1';
             if (!data.schemaVersion || pendingSync) {
@@ -347,6 +358,7 @@
                     if (!result.data?.schemaVersion && window.toastr) toastr.success('本地头像框已迁移到酒馆后端');
                 }
             }
+            if (needsMigration && data.schemaVersion && !pendingSync) data = await this._saveServer(data);
             this._cache = normalizeFrameData(data);
             await LocalDataStore.save(this._cache).catch(() => {});
             return cloneFrameData(this._cache);
