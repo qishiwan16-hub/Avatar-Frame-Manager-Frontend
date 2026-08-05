@@ -9,7 +9,6 @@
     const SCRIPT_VERSION = '2.7.0';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
-    const FRAME_OVERLAY_CLASS = 'st-avatar-frame-direct-overlay';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
     const INITIAL_SCRIPT_URL = document.currentScript && document.currentScript.src || '';
     const DARK_MODE_STORAGE_KEY = 'ST_AFM_DarkMode';
@@ -656,69 +655,8 @@
     // ===========================
     // 2. 核心 CSS 注入逻辑
     // ===========================
-    let latestAppliedFrameData = null;
-    let frameOverlayObserver = null;
-    let frameOverlayTimer = null;
-
-    function frameSourceCSSURL(source) {
-        return `url("${String(source || '').replace(/\\/g, '\\\\').replace(/"/g, '\\\"')}")`;
-    }
-
-    function renderDirectAvatarFrames(data) {
-        if (!document || !document.querySelectorAll) return;
-        const avatars = document.querySelectorAll('.mes .avatar');
-        avatars.forEach(avatar => {
-            avatar.querySelectorAll(`.${FRAME_OVERLAY_CLASS}`).forEach(node => node.remove());
-            const message = avatar.closest('.mes');
-            if (!message) return;
-            const isUser = String(message.getAttribute('is_user') || '').toLowerCase() === 'true';
-            const source = isUser ? data.activeUserSrc : data.activeCharSrc;
-            if (!source) return;
-            const settings = isUser ? data.userSettings : data.charSettings;
-            const computed = window.getComputedStyle ? window.getComputedStyle(avatar) : null;
-            if (computed && computed.position === 'static') avatar.style.position = 'relative';
-            const overlay = document.createElement('span');
-            overlay.className = FRAME_OVERLAY_CLASS;
-            overlay.setAttribute('aria-hidden', 'true');
-            Object.assign(overlay.style, {
-                content: '""',
-                display: 'block',
-                position: 'absolute',
-                top: `${settings.top}%`,
-                left: `${settings.left}%`,
-                width: `${settings.width}%`,
-                height: `${settings.height}%`,
-                backgroundImage: frameSourceCSSURL(source),
-                backgroundSize: 'contain',
-                backgroundRepeat: 'no-repeat',
-                backgroundPosition: 'center',
-                pointerEvents: 'none',
-                zIndex: '10'
-            });
-            avatar.appendChild(overlay);
-        });
-    }
-
-    function installDirectAvatarFrameObserver() {
-        if (frameOverlayObserver || typeof MutationObserver !== 'function') return;
-        const root = document.querySelector('#chat') || document.body;
-        if (!root) return;
-        frameOverlayObserver = new MutationObserver(records => {
-            if (!latestAppliedFrameData) return;
-            const hasNewMessages = records.some(record => Array.from(record.addedNodes || []).some(node => {
-                if (node.nodeType !== 1 || node.classList?.contains(FRAME_OVERLAY_CLASS)) return false;
-                return node.matches?.('.mes') || node.querySelector?.('.mes, .avatar');
-            }));
-            if (!hasNewMessages) return;
-            if (frameOverlayTimer) clearTimeout(frameOverlayTimer);
-            frameOverlayTimer = setTimeout(() => renderDirectAvatarFrames(latestAppliedFrameData), 30);
-        });
-        frameOverlayObserver.observe(root, { childList: true, subtree: true });
-    }
-
     async function applyInjectedCSS(sourceData = null) {
         const data = normalizeFrameData(sourceData || await DataManager.load());
-        latestAppliedFrameData = data;
         $(`#${APPLIED_STYLE_ID}`).remove();
         let css = '';
 
@@ -729,7 +667,6 @@
         const cssUrl = (src) => `url("${String(src || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`;
         const getRule = (settings) => `
             content: "";
-            display: block !important;
             background-size: contain !important;
             background-repeat: no-repeat !important;
             background-position: center !important;
@@ -742,36 +679,20 @@
             z-index: 10 !important;
         `;
 
-        const addFrameRules = (selectors, source, settings) => {
-            if (!source) return;
-            const rule = `background-image: ${cssUrl(source)} !important; ${getRule(settings)}`;
-            selectors.forEach(selector => {
-                css += `\n${selector} { position: relative !important; }`;
-                css += `\n${selector}::${pseudo} { ${rule} }`;
-            });
-        };
-
-        addFrameRules([
-            '.mes[is_user="true"] .avatar',
-            '.mes[is_user="true"] .avatar-container .avatar'
-        ], data.activeUserSrc, u);
+        if (data.activeUserSrc) css += `\n.mes[is_user="true"] .avatar::${pseudo} { background-image: ${cssUrl(data.activeUserSrc)} !important; ${getRule(u)} }`;
         // Via 浏览器的 WebView 对 :not([attr=...]) + 伪元素组合选择器兼容性较差，
         // 会导致整条 char 规则失效；拆成多条简单选择器，并保留原版的精确选择器作为第一条。
-        addFrameRules([
-            '.mes[is_user="false"] .avatar',
-            '.mes:not([is_user="true"]) .avatar',
-            '.mes:not([is_user]) .avatar',
-            '.mes:not([is_user="true"]) .avatar-container .avatar'
-        ], data.activeCharSrc, c);
-
-        if (css) {
-            const style = document.createElement('style');
-            style.id = APPLIED_STYLE_ID;
-            style.textContent = css;
-            document.head.appendChild(style);
+        if (data.activeCharSrc) {
+            const charRule = `background-image: ${cssUrl(data.activeCharSrc)} !important; ${getRule(c)}`;
+            css += `
+.mes[is_user="false"] .avatar::${pseudo} { ${charRule} }`;
+            css += `
+.mes:not([is_user="true"]) .avatar::${pseudo} { ${charRule} }`;
+            css += `
+.mes:not([is_user]) .avatar::${pseudo} { ${charRule} }`;
         }
-        renderDirectAvatarFrames(data);
-        installDirectAvatarFrameObserver();
+
+        if (css) $('head').append(`<style id="${APPLIED_STYLE_ID}">${css}</style>`);
     }
 
     let lastThemeBindingId = null;
@@ -2169,8 +2090,7 @@
         // 卡片点击逻辑
         $popup.on('click', '.afm-card', async function(e) {
             const $card = $(this);
-            const index = Number.parseInt($card.attr('data-index'), 10);
-            if (!Number.isInteger(index) || index < 0) return;
+            const index = parseInt($card.attr('data-index'));
 
             if (isMultiMode) {
                 if (selectedIndices.has(index)) {
@@ -2188,17 +2108,16 @@
 
             const $grid = $card.closest('.afm-grid');
             const isUser = $grid.attr('id') === 'grid-user';
+            const imgSrc = $card.find('img').attr('src');
+
             $grid.find('.afm-card').removeClass('active');
             $card.addClass('active');
 
             currentData = await DataManager.load();
             const list = isUser ? currentData.userFrames : currentData.charFrames;
-            const selectedFrame = list[index];
-            if (!selectedFrame || !selectedFrame.src) return;
-            const frameSrc = String(selectedFrame.src);
-            const frameName = selectedFrame.name ? selectedFrame.name : '未命名头像框';
-            if (isUser) currentData.activeUserSrc = frameSrc;
-            else currentData.activeCharSrc = frameSrc;
+            const frameName = (list[index] && list[index].name) ? list[index].name : '未命名头像框';
+            if (isUser) currentData.activeUserSrc = imgSrc;
+            else currentData.activeCharSrc = imgSrc;
             await DataManager.save(currentData);
             await applyInjectedCSS(currentData);
             if (window.toastr) toastr.success(`已更换${isUser ? 'user' : 'char'}头像框为${frameName}`);
