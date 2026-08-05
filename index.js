@@ -665,6 +665,7 @@
         const pseudo = data.pseudoTarget || 'after';
 
         const cssUrl = (src) => `url("${String(src || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`;
+        const getBackgroundRule = (src) => `background: transparent ${cssUrl(src)} center / contain no-repeat !important; background-image: ${cssUrl(src)} !important;`;
         const getRule = (settings) => `
             content: "" !important;
             background-color: transparent !important;
@@ -683,11 +684,11 @@
             z-index: 10 !important;
         `;
 
-        if (data.activeUserSrc) css += `\n.mes[is_user="true"] .avatar::${pseudo} { background-image: ${cssUrl(data.activeUserSrc)} !important; ${getRule(u)} }`;
+        if (data.activeUserSrc) css += `\n.mes[is_user="true"] .avatar::${pseudo} { ${getBackgroundRule(data.activeUserSrc)} ${getRule(u)} }`;
         // Via 浏览器的 WebView 对 :not([attr=...]) + 伪元素组合选择器兼容性较差，
         // 会导致整条 char 规则失效；拆成多条简单选择器，并保留原版的精确选择器作为第一条。
         if (data.activeCharSrc) {
-            const charRule = `background-image: ${cssUrl(data.activeCharSrc)} !important; ${getRule(c)}`;
+            const charRule = `${getBackgroundRule(data.activeCharSrc)} ${getRule(c)}`;
             css += `
 .mes[is_user="false"] .avatar::${pseudo} { ${charRule} }`;
             css += `
