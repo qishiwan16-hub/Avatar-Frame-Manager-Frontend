@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.8.0';
+    const SCRIPT_VERSION = '2.8.1';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -74,6 +74,19 @@
                 updatedAt: Number(preset.updatedAt) || Date.now()
             };
         });
+    }
+
+    function createPresetSnapshot(data, name, id = createPresetId()) {
+        return {
+            id,
+            name: String(name || '未命名预设').trim() || '未命名预设',
+            activeUserSrc: data.activeUserSrc || null,
+            activeCharSrc: data.activeCharSrc || null,
+            userSettings: normalizeBindingSettings(data.userSettings),
+            charSettings: normalizeBindingSettings(data.charSettings),
+            pseudoTarget: data.pseudoTarget === 'before' ? 'before' : 'after',
+            updatedAt: Date.now()
+        };
     }
 
     function presetMatchesData(preset, data) {
@@ -1330,8 +1343,8 @@
             .afm-preset-name { font-size: 0.9em; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .afm-preset-meta { margin-top: 3px; font-size: 0.74em; opacity: 0.62; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .afm-preset-actions { display: flex; align-items: center; gap: 5px; }
-            .afm-preset-switch { min-height: 30px; padding: 5px 9px; border: 1px solid var(--SmartThemeQuoteColor); border-radius: 7px; background: transparent; color: var(--SmartThemeQuoteColor); cursor: pointer; }
-            .afm-preset-switch:hover { background: var(--SmartThemeQuoteColor); color: white; }
+            .afm-preset-switch, .afm-preset-save { min-height: 30px; padding: 5px 9px; border: 1px solid var(--SmartThemeQuoteColor); border-radius: 7px; background: transparent; color: var(--SmartThemeQuoteColor); cursor: pointer; }
+            .afm-preset-switch:hover, .afm-preset-save:hover { background: var(--SmartThemeQuoteColor); color: white; }
             .afm-preset-switch:disabled { border-color: #35a85b; background: rgba(53,168,91,0.12); color: #35a85b; cursor: default; }
             .afm-preset-icon { width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: inherit; cursor: pointer; opacity: 0.6; }
             .afm-preset-icon:hover { opacity: 1; background: rgba(0,0,0,0.06); color: var(--SmartThemeQuoteColor); }
@@ -1593,6 +1606,7 @@
                     </div>
                     <div class="afm-preset-actions">
                         <button class="afm-preset-switch" type="button" ${isActive ? 'disabled' : ''}><i class="fa-solid fa-repeat"></i> ${isActive ? '当前' : '切换'}</button>
+                        <button class="afm-preset-save" type="button" title="用当前配置覆盖此预设"><i class="fa-solid fa-floppy-disk"></i> 保存</button>
                         <button class="afm-preset-icon rename" type="button" title="修改名称"><i class="fa-solid fa-pencil"></i></button>
                         <button class="afm-preset-icon danger delete" type="button" title="删除"><i class="fa-solid fa-trash-can"></i></button>
                     </div>
@@ -1970,16 +1984,7 @@
                 const name = await showAFMTextDialog({ title: '保存头像框预设', message: '请输入新预设名称。', value: '' });
                 if (!name || !name.trim()) return;
                 currentData = await DataManager.load();
-                const preset = {
-                    id: createPresetId(),
-                    name: name.trim(),
-                    activeUserSrc: currentData.activeUserSrc || null,
-                    activeCharSrc: currentData.activeCharSrc || null,
-                    userSettings: normalizeBindingSettings(currentData.userSettings),
-                    charSettings: normalizeBindingSettings(currentData.charSettings),
-                    pseudoTarget: currentData.pseudoTarget === 'before' ? 'before' : 'after',
-                    updatedAt: Date.now()
-                };
+                const preset = createPresetSnapshot(currentData, name.trim());
                 currentData.presets.push(preset);
                 currentData.activePresetId = preset.id;
                 await DataManager.save(currentData);
@@ -2004,6 +2009,21 @@
                 await applyInjectedCSS(currentData);
                 refreshAllConfigurationViews();
                 if (window.toastr) toastr.success(`已切换为预设“${preset.name}”`);
+            });
+
+            $popup.find('.afm-preset-save').on('click', async function() {
+                const presetId = String($(this).closest('.afm-preset-item').data('preset-id') || '');
+                currentData = await DataManager.load();
+                const presetIndex = currentData.presets.findIndex(item => item.id === presetId);
+                if (presetIndex < 0) return;
+                const preset = currentData.presets[presetIndex];
+                const ok = await showAFMConfirmDialog({ title: '覆盖头像框预设', message: `确定用当前 User、Char 头像框和位置参数覆盖“${preset.name}”吗？`, okText: '保存覆盖' });
+                if (!ok) return;
+                currentData.presets[presetIndex] = createPresetSnapshot(currentData, preset.name, preset.id);
+                currentData.activePresetId = preset.id;
+                await DataManager.save(currentData);
+                renderPresets();
+                if (window.toastr) toastr.success(`当前配置已保存到预设“${preset.name}”`);
             });
 
             $popup.find('.afm-preset-icon.rename').on('click', async function() {
