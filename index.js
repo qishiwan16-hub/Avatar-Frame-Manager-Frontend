@@ -9,6 +9,7 @@
     const SCRIPT_VERSION = '2.7.0';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
+    const FRAME_OVERLAY_CLASS = 'st-avatar-frame-direct-overlay';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
     const INITIAL_SCRIPT_URL = document.currentScript && document.currentScript.src || '';
     const DARK_MODE_STORAGE_KEY = 'ST_AFM_DarkMode';
@@ -655,8 +656,69 @@
     // ===========================
     // 2. 核心 CSS 注入逻辑
     // ===========================
+    let latestAppliedFrameData = null;
+    let frameOverlayObserver = null;
+    let frameOverlayTimer = null;
+
+    function frameSourceCSSURL(source) {
+        return `url("${String(source || '').replace(/\\/g, '\\\\').replace(/"/g, '\\\"')}")`;
+    }
+
+    function renderDirectAvatarFrames(data) {
+        if (!document || !document.querySelectorAll) return;
+        const avatars = document.querySelectorAll('.mes .avatar');
+        avatars.forEach(avatar => {
+            avatar.querySelectorAll(`.${FRAME_OVERLAY_CLASS}`).forEach(node => node.remove());
+            const message = avatar.closest('.mes');
+            if (!message) return;
+            const isUser = String(message.getAttribute('is_user') || '').toLowerCase() === 'true';
+            const source = isUser ? data.activeUserSrc : data.activeCharSrc;
+            if (!source) return;
+            const settings = isUser ? data.userSettings : data.charSettings;
+            const computed = window.getComputedStyle ? window.getComputedStyle(avatar) : null;
+            if (computed && computed.position === 'static') avatar.style.position = 'relative';
+            const overlay = document.createElement('span');
+            overlay.className = FRAME_OVERLAY_CLASS;
+            overlay.setAttribute('aria-hidden', 'true');
+            Object.assign(overlay.style, {
+                content: '""',
+                display: 'block',
+                position: 'absolute',
+                top: `${settings.top}%`,
+                left: `${settings.left}%`,
+                width: `${settings.width}%`,
+                height: `${settings.height}%`,
+                backgroundImage: frameSourceCSSURL(source),
+                backgroundSize: 'contain',
+                backgroundRepeat: 'no-repeat',
+                backgroundPosition: 'center',
+                pointerEvents: 'none',
+                zIndex: '10'
+            });
+            avatar.appendChild(overlay);
+        });
+    }
+
+    function installDirectAvatarFrameObserver() {
+        if (frameOverlayObserver || typeof MutationObserver !== 'function') return;
+        const root = document.querySelector('#chat') || document.body;
+        if (!root) return;
+        frameOverlayObserver = new MutationObserver(records => {
+            if (!latestAppliedFrameData) return;
+            const hasNewMessages = records.some(record => Array.from(record.addedNodes || []).some(node => {
+                if (node.nodeType !== 1 || node.classList?.contains(FRAME_OVERLAY_CLASS)) return false;
+                return node.matches?.('.mes') || node.querySelector?.('.mes, .avatar');
+            }));
+            if (!hasNewMessages) return;
+            if (frameOverlayTimer) clearTimeout(frameOverlayTimer);
+            frameOverlayTimer = setTimeout(() => renderDirectAvatarFrames(latestAppliedFrameData), 30);
+        });
+        frameOverlayObserver.observe(root, { childList: true, subtree: true });
+    }
+
     async function applyInjectedCSS(sourceData = null) {
         const data = normalizeFrameData(sourceData || await DataManager.load());
+        latestAppliedFrameData = data;
         $(`#${APPLIED_STYLE_ID}`).remove();
         let css = '';
 
@@ -702,7 +764,14 @@
             '.mes:not([is_user="true"]) .avatar-container .avatar'
         ], data.activeCharSrc, c);
 
-        if (css) $('head').append(`<style id="${APPLIED_STYLE_ID}">${css}</style>`);
+        if (css) {
+            const style = document.createElement('style');
+            style.id = APPLIED_STYLE_ID;
+            style.textContent = css;
+            document.head.appendChild(style);
+        }
+        renderDirectAvatarFrames(data);
+        installDirectAvatarFrameObserver();
     }
 
     let lastThemeBindingId = null;
