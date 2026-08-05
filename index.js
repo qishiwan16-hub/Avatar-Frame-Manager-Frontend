@@ -655,9 +655,45 @@
     // ===========================
     // 2. 核心 CSS 注入逻辑
     // ===========================
+    let appliedFrameCSS = '';
+    let appliedFrameStyleObserver = null;
+    let appliedFrameStyleTimer = null;
+    let replacingAppliedFrameStyle = false;
+
+    function mountAppliedFrameStyle(css) {
+        appliedFrameCSS = css || '';
+        replacingAppliedFrameStyle = true;
+        const existing = document.getElementById(APPLIED_STYLE_ID);
+        if (existing) existing.remove();
+        if (appliedFrameCSS && document.head) {
+            const style = document.createElement('style');
+            style.id = APPLIED_STYLE_ID;
+            style.textContent = appliedFrameCSS;
+            document.head.appendChild(style);
+        }
+        replacingAppliedFrameStyle = false;
+    }
+
+    function installAppliedFrameStyleObserver() {
+        if (appliedFrameStyleObserver || typeof MutationObserver !== 'function' || !document.head) return;
+        appliedFrameStyleObserver = new MutationObserver(records => {
+            if (replacingAppliedFrameStyle || !appliedFrameCSS) return;
+            const changed = records.some(record => {
+                if (record.type === 'characterData') return record.target.parentElement?.id !== APPLIED_STYLE_ID;
+                return Array.from(record.addedNodes || []).concat(Array.from(record.removedNodes || [])).some(node => {
+                    if (node.nodeType !== 1 || node.id === APPLIED_STYLE_ID) return false;
+                    return node.tagName === 'STYLE' || node.tagName === 'LINK' || !!node.querySelector?.('style, link');
+                });
+            });
+            if (!changed) return;
+            if (appliedFrameStyleTimer) clearTimeout(appliedFrameStyleTimer);
+            appliedFrameStyleTimer = setTimeout(() => mountAppliedFrameStyle(appliedFrameCSS), 40);
+        });
+        appliedFrameStyleObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+    }
+
     async function applyInjectedCSS(sourceData = null) {
         const data = normalizeFrameData(sourceData || await DataManager.load());
-        $(`#${APPLIED_STYLE_ID}`).remove();
         let css = '';
 
         const u = data.userSettings;
@@ -697,7 +733,8 @@
 .mes:not([is_user]) .avatar::${pseudo} { ${charRule} }`;
         }
 
-        if (css) $('head').append(`<style id="${APPLIED_STYLE_ID}">${css}</style>`);
+        mountAppliedFrameStyle(css);
+        installAppliedFrameStyleObserver();
     }
 
     let lastThemeBindingId = null;
@@ -2532,6 +2569,10 @@
         if (window.__afmMenuWatcherTimer) clearInterval(window.__afmMenuWatcherTimer);
         if (window.__afmThemeBindingWatcherTimer) clearInterval(window.__afmThemeBindingWatcherTimer);
         if (window.__afmThemeBindingDebounceTimer) clearTimeout(window.__afmThemeBindingDebounceTimer);
+        if (appliedFrameStyleTimer) clearTimeout(appliedFrameStyleTimer);
+        if (appliedFrameStyleObserver) appliedFrameStyleObserver.disconnect();
+        appliedFrameStyleObserver = null;
+        appliedFrameCSS = '';
         $('#themes').removeData('afm-theme-watcher-bound').off('change.afmThemeBinding');
         $('.nsk-overlay').remove();
         $(`#${MENU_BTN_ID}`).remove();
