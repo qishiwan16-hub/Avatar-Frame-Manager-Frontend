@@ -666,10 +666,14 @@
 
         const cssUrl = (src) => `url("${String(src || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`;
         const getRule = (settings) => `
-            content: "";
+            content: "" !important;
+            background-color: transparent !important;
             background-size: contain !important;
             background-repeat: no-repeat !important;
             background-position: center !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            filter: none !important;
             position: absolute !important;
             top: ${settings.top}% !important;
             left: ${settings.left}% !important;
