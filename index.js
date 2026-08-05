@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '2.8.1';
+    const SCRIPT_VERSION = '2.9.1';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -30,20 +30,24 @@
         return normalized;
     }
 
+    function normalizeThemeId(value) {
+        let result = String(value || '').trim();
+        try { result = decodeURIComponent(result); } catch (error) {}
+        return result.replace(/[?#].*$/, '').replace(/\.(?:css|less|json)$/i, '').trim();
+    }
+
     function normalizeThemeBindings(bindings) {
         if (!bindings || typeof bindings !== 'object' || Array.isArray(bindings)) return {};
         const normalized = {};
         Object.entries(bindings).forEach(([rawId, rawBinding]) => {
             const binding = rawBinding && typeof rawBinding === 'object' ? rawBinding : {};
-            const themeId = String(binding.themeId || rawId || '').trim();
+            const themeId = normalizeThemeId(binding.themeId || rawId);
             if (!themeId) return;
             normalized[themeId] = {
                 themeId,
                 themeName: String(binding.themeName || themeId).trim() || themeId,
                 userFrameSrc: String(binding.userFrameSrc || binding.frameSrc || binding.src || '').trim(),
                 charFrameSrc: String(binding.charFrameSrc || '').trim(),
-                userSettings: normalizeBindingSettings(binding.userSettings || binding.settings),
-                charSettings: normalizeBindingSettings(binding.charSettings),
                 updatedAt: Number(binding.updatedAt) || Date.now()
             };
         });
@@ -68,8 +72,6 @@
                 name: String(preset.name || `预设 ${index + 1}`).trim() || `预设 ${index + 1}`,
                 activeUserSrc: String(preset.activeUserSrc || preset.userFrameSrc || '').trim() || null,
                 activeCharSrc: String(preset.activeCharSrc || preset.charFrameSrc || '').trim() || null,
-                userSettings: normalizeBindingSettings(preset.userSettings),
-                charSettings: normalizeBindingSettings(preset.charSettings),
                 pseudoTarget: preset.pseudoTarget === 'before' ? 'before' : 'after',
                 updatedAt: Number(preset.updatedAt) || Date.now()
             };
@@ -82,8 +84,6 @@
             name: String(name || '未命名预设').trim() || '未命名预设',
             activeUserSrc: data.activeUserSrc || null,
             activeCharSrc: data.activeCharSrc || null,
-            userSettings: normalizeBindingSettings(data.userSettings),
-            charSettings: normalizeBindingSettings(data.charSettings),
             pseudoTarget: data.pseudoTarget === 'before' ? 'before' : 'after',
             updatedAt: Date.now()
         };
@@ -93,8 +93,6 @@
         if (!preset || !data) return false;
         return (preset.activeUserSrc || null) === (data.activeUserSrc || null) &&
             (preset.activeCharSrc || null) === (data.activeCharSrc || null) &&
-            bindingSettingsEqual(preset.userSettings, data.userSettings) &&
-            bindingSettingsEqual(preset.charSettings, data.charSettings) &&
             (preset.pseudoTarget || 'after') === (data.pseudoTarget || 'after');
     }
 
@@ -158,14 +156,22 @@
 
     function getCurrentThemeSnapshot() {
         const context = getSillyTavernContext();
-        const $themeSelect = $('#themes').first();
-        const selectedId = $themeSelect.length ? String($themeSelect.val() || '').trim() : '';
+        const $themeSelect = $('#themes, #theme').filter(function() { return String($(this).val() || '').trim() !== ''; }).first();
+        const selectedId = $themeSelect.length ? normalizeThemeId($themeSelect.val()) : '';
         const selectedName = $themeSelect.length ? String($themeSelect.find('option:selected').text() || '').trim() : '';
-        const themeId = String(
-            selectedId || context.powerUserSettings?.theme || context.power_user?.theme || window.power_user?.theme || ''
-        ).trim();
+        const themeHref = String($('link[href*="/themes/"]').first().attr('href') || '');
+        const themeMatch = themeHref.match(/\/themes\/([^/?#]+)/i);
+        const linkedThemeId = themeMatch ? normalizeThemeId(themeMatch[1]) : '';
+        const settingsThemeId = normalizeThemeId(
+            (typeof settings !== 'undefined' && settings.visual_theme) ||
+            context.powerUserSettings?.visual_theme || context.powerUserSettings?.theme ||
+            context.power_user?.visual_theme || context.power_user?.theme ||
+            window.power_user?.visual_theme || window.power_user?.theme || ''
+        );
+        const detected = !!(selectedId || linkedThemeId || settingsThemeId);
+        const themeId = selectedId || linkedThemeId || settingsThemeId || 'Default_Theme';
         const themeName = String(selectedName || themeId).trim() || themeId;
-        return { id: themeId, name: themeName };
+        return { id: themeId, name: themeName, detected };
     }
 
     function getFrameNameFromFile(file, fallbackIndex) {
@@ -757,45 +763,30 @@
     }
 
     let lastThemeBindingId = null;
-    let pendingThemeBindingId = null;
     let themeBindingWatcherInitialized = false;
     let themeBindingSyncPromise = Promise.resolve();
 
-    function bindingSettingsEqual(left, right) {
-        const a = normalizeBindingSettings(left);
-        const b = normalizeBindingSettings(right);
-        return ['top', 'left', 'width', 'height'].every(key => Number(a[key]) === Number(b[key]));
-    }
-
     async function syncThemeBinding() {
         const theme = getCurrentThemeSnapshot();
-        if (!theme.id || theme.id === lastThemeBindingId || theme.id === pendingThemeBindingId) return;
-        pendingThemeBindingId = theme.id;
+        if (!theme.id || theme.id === lastThemeBindingId) return;
         lastThemeBindingId = theme.id;
         themeBindingSyncPromise = themeBindingSyncPromise.then(async () => {
+            if (getCurrentThemeSnapshot().id !== theme.id) return;
             const data = await DataManager.load();
             const binding = data.themeBindings[theme.id];
             const userFrameExists = binding && binding.userFrameSrc && data.userFrames.some(frame => frame.src === binding.userFrameSrc);
             const charFrameExists = binding && binding.charFrameSrc && data.charFrames.some(frame => frame.src === binding.charFrameSrc);
             const nextUserFrameSrc = userFrameExists ? binding.userFrameSrc : null;
             const nextCharFrameSrc = charFrameExists ? binding.charFrameSrc : null;
-            const nextUserSettings = userFrameExists ? normalizeBindingSettings(binding.userSettings) : data.userSettings;
-            const nextCharSettings = charFrameExists ? normalizeBindingSettings(binding.charSettings) : data.charSettings;
-            const changed = data.activeUserSrc !== nextUserFrameSrc || data.activeCharSrc !== nextCharFrameSrc ||
-                (userFrameExists && !bindingSettingsEqual(data.userSettings, nextUserSettings)) ||
-                (charFrameExists && !bindingSettingsEqual(data.charSettings, nextCharSettings));
+            const changed = data.activeUserSrc !== nextUserFrameSrc || data.activeCharSrc !== nextCharFrameSrc;
             if (changed) {
                 data.activeUserSrc = nextUserFrameSrc;
                 data.activeCharSrc = nextCharFrameSrc;
-                if (userFrameExists) data.userSettings = nextUserSettings;
-                if (charFrameExists) data.charSettings = nextCharSettings;
                 await DataManager.save(data);
             }
             await applyInjectedCSS(data);
             if (typeof window.CustomEvent === 'function') window.dispatchEvent(new CustomEvent('afm-theme-binding-applied', { detail: theme }));
-        }).catch(error => console.warn('[头像框管理器] 美化绑定同步失败', error)).finally(() => {
-            pendingThemeBindingId = null;
-        });
+        }).catch(error => console.warn('[头像框管理器] 美化绑定同步失败', error));
         return themeBindingSyncPromise;
     }
 
@@ -803,8 +794,10 @@
         if (window.__afmThemeBindingWatcherTimer) clearInterval(window.__afmThemeBindingWatcherTimer);
         if (window.__afmThemeBindingDebounceTimer) clearTimeout(window.__afmThemeBindingDebounceTimer);
         const scheduleSync = () => {
-            const expectedThemeId = getCurrentThemeSnapshot().id;
-            if (!expectedThemeId) return;
+            const expectedTheme = getCurrentThemeSnapshot();
+            const expectedThemeId = expectedTheme.id;
+            if (!expectedThemeId || !expectedTheme.detected) return;
+            $('.nsk-current-theme strong').text(expectedTheme.name || expectedThemeId);
             if (!themeBindingWatcherInitialized) {
                 lastThemeBindingId = expectedThemeId;
                 themeBindingWatcherInitialized = true;
@@ -818,15 +811,15 @@
             }, 350);
         };
         const bindThemeSelector = () => {
-            const $themes = $('#themes').first();
-            if (!$themes.length) return;
-            if (!$themes.data('afm-theme-watcher-bound')) {
-                $themes.data('afm-theme-watcher-bound', true).off('change.afmThemeBinding').on('change.afmThemeBinding', scheduleSync);
-            }
-            if (!themeBindingWatcherInitialized) scheduleSync();
+            $('#themes, #theme').each(function() {
+                const $selector = $(this);
+                if ($selector.data('afm-theme-watcher-bound')) return;
+                $selector.data('afm-theme-watcher-bound', true).off('change.afmThemeBinding').on('change.afmThemeBinding', scheduleSync);
+            });
+            scheduleSync();
         };
         bindThemeSelector();
-        window.__afmThemeBindingWatcherTimer = setInterval(bindThemeSelector, 1200);
+        window.__afmThemeBindingWatcherTimer = setInterval(bindThemeSelector, 1000);
     }
 
     const EXTENSION_RAW_MANIFEST_URL = 'https://raw.githubusercontent.com/qishiwan16-hub/Avatar-Frame-Manager-Frontend/main/manifest.json';
@@ -1034,7 +1027,10 @@
                 display: flex; justify-content: space-between; align-items: center;
                 padding: 15px; border-bottom: 1px solid rgba(0,0,0,0.05); flex-shrink: 0;
             }
+            .nsk-title-block { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
             .nsk-title { font-weight: bold; font-size: 1.1em; display: flex; align-items: center; gap: 8px; }
+            .nsk-current-theme { font-size: 0.76em; opacity: 0.62; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .nsk-current-theme i { margin-right: 4px; }
             .nsk-version { font-size: 0.68em; line-height: 1; font-weight: 600; opacity: 0.58; padding: 4px 6px; border: 1px solid currentColor; border-radius: 6px; }
             .nsk-header-actions { display: flex; align-items: center; gap: 5px; }
             .nsk-theme-toggle {
@@ -1289,6 +1285,7 @@
                 gap: 8px; border-bottom: 1.5px solid rgba(0,0,0,0.05); padding-bottom: 8px; justify-content: space-between; 
             }
             .afm-setting-header i { color: var(--SmartThemeQuoteColor); }
+            .afm-global-label { display: inline-flex; margin-left: 5px; padding: 2px 5px; border: 1px solid currentColor; border-radius: 5px; font-size: 0.68em; line-height: 1; opacity: 0.62; vertical-align: middle; }
             .afm-control-row { display: flex; align-items: center; margin-bottom: 10px; font-size: 0.9em; }
             .afm-control-label { width: 50px; flex-shrink: 0; opacity: 0.7; }
             .afm-slider { flex: 1; margin: 0 10px !important; cursor: pointer; accent-color: var(--SmartThemeQuoteColor); }
@@ -1484,7 +1481,7 @@
                 </div>
                 <div class="afm-setting-group">
                     <div class="afm-setting-header">
-                        <span><i class="fa-solid fa-user"></i> User 头像框调整 (%)</span>
+                        <span><i class="fa-solid fa-user"></i> User 头像框调整 (%) <small class="afm-global-label">全局固定</small></span>
                         <div class="afm-setting-actions">
                             <div class="afm-save-setting-btn" data-target="userSettings"><i class="fa-solid fa-floppy-disk"></i> 保存</div>
                             <div class="afm-reset-setting-btn" data-target="userSettings"><i class="fa-solid fa-rotate-left"></i> 重置</div>
@@ -1497,7 +1494,7 @@
                 </div>
                 <div class="afm-setting-group">
                     <div class="afm-setting-header">
-                        <span><i class="fa-solid fa-robot"></i> Char 头像框调整 (%)</span>
+                        <span><i class="fa-solid fa-robot"></i> Char 头像框调整 (%) <small class="afm-global-label">全局固定</small></span>
                         <div class="afm-setting-actions">
                             <div class="afm-save-setting-btn" data-target="charSettings"><i class="fa-solid fa-floppy-disk"></i> 保存</div>
                             <div class="afm-reset-setting-btn" data-target="charSettings"><i class="fa-solid fa-rotate-left"></i> 重置</div>
@@ -1547,10 +1544,6 @@
         const selectedBinding = data.themeBindings[currentThemeId] || null;
         const currentUserFrame = data.userFrames.find(frame => frame.src === data.activeUserSrc);
         const currentCharFrame = data.charFrames.find(frame => frame.src === data.activeCharSrc);
-        const formatSettings = settings => {
-            const value = normalizeBindingSettings(settings);
-            return `Top ${value.top}% / Left ${value.left}% / 宽 ${value.width}% / 高 ${value.height}%`;
-        };
         const renderThumb = (src, role) => src ? `<img class="afm-binding-thumb" src="${escapeHTML(src)}" alt="${role}">` : `<div class="afm-binding-thumb-empty">${role}</div>`;
         const bindingItems = bindings.length ? bindings.map(binding => `
             <div class="afm-binding-item ${binding.themeId === currentThemeId ? 'active' : ''}" data-theme-id="${escapeHTML(binding.themeId)}">
@@ -1571,9 +1564,10 @@
                     </div>
                     <div class="afm-binding-current"><strong>当前美化：${escapeHTML(currentTheme.name || '未检测到')}</strong><code>${escapeHTML(currentTheme.id || '未检测到美化标识')}</code></div>
                     <div class="afm-binding-current">
-                        <strong>保存时直接读取当前配置</strong>
-                        <code>User：${escapeHTML(currentUserFrame ? currentUserFrame.name : '未选择')} · ${escapeHTML(formatSettings(data.userSettings))}</code>
-                        <code>Char：${escapeHTML(currentCharFrame ? currentCharFrame.name : '未选择')} · ${escapeHTML(formatSettings(data.charSettings))}</code>
+                        <strong>绑定只保存头像框选择</strong>
+                        <code>User：${escapeHTML(currentUserFrame ? currentUserFrame.name : '未选择')}</code>
+                        <code>Char：${escapeHTML(currentCharFrame ? currentCharFrame.name : '未选择')}</code>
+                        <code>设置页的 User、Char 位置数值为全局固定值，不随美化切换。</code>
                     </div>
                     <div class="afm-binding-actions">
                         <button class="afm-binding-action primary" id="afm-save-binding" type="button"><i class="fa-solid fa-floppy-disk"></i> 保存绑定</button>
@@ -1616,7 +1610,7 @@
             <div class="afm-settings-container">
                 <div class="afm-setting-group">
                     <div class="afm-setting-header"><span><i class="fa-solid fa-box-archive"></i> 预设管理</span></div>
-                    <div class="afm-binding-current"><strong>保存当前完整配置</strong><code>同时记录 User、Char 头像框、两侧位置参数和伪元素设置</code></div>
+                    <div class="afm-binding-current"><strong>保存当前头像框组合</strong><code>记录 User、Char 头像框和伪元素设置；位置数值保持全局固定。</code></div>
                     <button class="afm-preset-add" id="afm-add-preset" type="button"><i class="fa-solid fa-plus"></i> 将当前配置保存为新预设</button>
                 </div>
                 <div class="afm-setting-group">
@@ -1636,6 +1630,7 @@
         let selectedIndices = new Set();
         let currentData = await DataManager.load();
         const isDarkMode = localStorage.getItem(DARK_MODE_STORAGE_KEY) === 'true';
+        const currentTheme = getCurrentThemeSnapshot();
         const uiState = {
             user: { sort: 'order', group: 'all', search: '', page: 0 },
             char: { sort: 'order', group: 'all', search: '', page: 0 }
@@ -1646,7 +1641,10 @@
                 <div class="nsk-box">
                     
                     <div class="nsk-header">
-                        <div class="nsk-title"><i class="fa-solid fa-crop-simple"></i> ${SCRIPT_NAME}<span class="nsk-version">v${SCRIPT_VERSION}</span></div>
+                        <div class="nsk-title-block">
+                            <div class="nsk-title"><i class="fa-solid fa-crop-simple"></i> ${SCRIPT_NAME}<span class="nsk-version">v${SCRIPT_VERSION}</span></div>
+                            <div class="nsk-current-theme"><i class="fa-solid fa-circle-info"></i> 当前主题：<strong>${escapeHTML(currentTheme.name || currentTheme.id)}</strong></div>
+                        </div>
                         <div class="nsk-header-actions">
                             <button class="nsk-theme-toggle" id="afm-theme-toggle" title="切换日间/夜间模式"><i class="fa-solid ${isDarkMode ? 'fa-sun' : 'fa-moon'}"></i></button>
                             <button class="nsk-close"><i class="fa-solid fa-xmark"></i></button>
@@ -1997,12 +1995,10 @@
                 currentData = await DataManager.load();
                 const preset = currentData.presets.find(item => item.id === presetId);
                 if (!preset) return;
-                const ok = await showAFMConfirmDialog({ title: '切换头像框预设', message: `确定切换为“${preset.name}”吗？当前头像框选择和位置参数将被替换。`, okText: '切换' });
+                const ok = await showAFMConfirmDialog({ title: '切换头像框预设', message: `确定切换为“${preset.name}”吗？只会切换头像框选择，不会修改全局位置数值。`, okText: '切换' });
                 if (!ok) return;
                 currentData.activeUserSrc = currentData.userFrames.some(frame => frame.src === preset.activeUserSrc) ? preset.activeUserSrc : null;
                 currentData.activeCharSrc = currentData.charFrames.some(frame => frame.src === preset.activeCharSrc) ? preset.activeCharSrc : null;
-                currentData.userSettings = normalizeBindingSettings(preset.userSettings);
-                currentData.charSettings = normalizeBindingSettings(preset.charSettings);
                 currentData.pseudoTarget = preset.pseudoTarget === 'before' ? 'before' : 'after';
                 currentData.activePresetId = preset.id;
                 await DataManager.save(currentData);
@@ -2017,7 +2013,7 @@
                 const presetIndex = currentData.presets.findIndex(item => item.id === presetId);
                 if (presetIndex < 0) return;
                 const preset = currentData.presets[presetIndex];
-                const ok = await showAFMConfirmDialog({ title: '覆盖头像框预设', message: `确定用当前 User、Char 头像框和位置参数覆盖“${preset.name}”吗？`, okText: '保存覆盖' });
+                const ok = await showAFMConfirmDialog({ title: '覆盖头像框预设', message: `确定用当前 User、Char 头像框选择覆盖“${preset.name}”吗？全局位置数值不会写入预设。`, okText: '保存覆盖' });
                 if (!ok) return;
                 currentData.presets[presetIndex] = createPresetSnapshot(currentData, preset.name, preset.id);
                 currentData.activePresetId = preset.id;
@@ -2075,15 +2071,11 @@
                     themeName,
                     userFrameSrc,
                     charFrameSrc,
-                    userSettings: normalizeBindingSettings(currentData.userSettings),
-                    charSettings: normalizeBindingSettings(currentData.charSettings),
                     updatedAt: Date.now()
                 };
                 if (activeTheme.id === themeId) {
                     currentData.activeUserSrc = userFrameSrc || null;
                     currentData.activeCharSrc = charFrameSrc || null;
-                    if (userFrameSrc) currentData.userSettings = normalizeBindingSettings(currentData.themeBindings[themeId].userSettings);
-                    if (charFrameSrc) currentData.charSettings = normalizeBindingSettings(currentData.themeBindings[themeId].charSettings);
                 }
                 await DataManager.save(currentData);
                 await applyInjectedCSS(currentData);
@@ -2115,8 +2107,10 @@
         await refreshGrids();
         bindBindingEvents();
         bindPresetEvents();
-        themeBindingAppliedHandler = async () => {
+        themeBindingAppliedHandler = async event => {
             currentData = await DataManager.load();
+            const appliedTheme = event && event.detail ? event.detail : getCurrentThemeSnapshot();
+            $popup.find('.nsk-current-theme strong').text(appliedTheme.name || appliedTheme.id || 'Default_Theme');
             renderRoleGrid(getActiveRole());
             renderSettings();
             renderBindings();
@@ -2757,7 +2751,7 @@
         if (window.__afmMenuWatcherTimer) clearInterval(window.__afmMenuWatcherTimer);
         if (window.__afmThemeBindingWatcherTimer) clearInterval(window.__afmThemeBindingWatcherTimer);
         if (window.__afmThemeBindingDebounceTimer) clearTimeout(window.__afmThemeBindingDebounceTimer);
-        $('#themes').removeData('afm-theme-watcher-bound').off('change.afmThemeBinding');
+        $('#themes, #theme').removeData('afm-theme-watcher-bound').off('change.afmThemeBinding');
         $('.nsk-overlay').remove();
         $(`#${MENU_BTN_ID}`).remove();
         $(`#${STYLE_ID}`).remove();
