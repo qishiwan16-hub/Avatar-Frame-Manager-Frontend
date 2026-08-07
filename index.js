@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '3.0.1';
+    const SCRIPT_VERSION = '3.0.2';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -85,6 +85,24 @@
         });
     }
 
+    function normalizeLastPresetByTheme(value, presets) {
+        const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+        const presetById = new Map((presets || []).map(preset => [preset.id, preset]));
+        const normalized = {};
+        Object.entries(source).forEach(([rawThemeId, rawPresetId]) => {
+            const themeId = normalizeThemeId(rawThemeId);
+            const presetId = String(rawPresetId || '').trim();
+            const preset = presetById.get(presetId);
+            if (themeId && preset && preset.themeId === themeId) normalized[themeId] = presetId;
+        });
+        (presets || []).forEach(preset => {
+            if (preset.themeId && preset.isActive && !normalized[preset.themeId]) {
+                normalized[preset.themeId] = preset.id;
+            }
+        });
+        return normalized;
+    }
+
     function createPresetSnapshot(data, name, id = createPresetId()) {
         const theme = getCurrentThemeSnapshot();
         return {
@@ -146,11 +164,16 @@
     function clearFrameFromPresets(data, role, frameSrc) {
         if (!data || !frameSrc) return;
         const presetKey = role === 'char' ? 'activeCharSrc' : 'activeUserSrc';
+        const affectedPresetIds = new Set();
         (data.presets || []).forEach(preset => {
             if (preset[presetKey] === frameSrc) {
                 preset[presetKey] = null;
                 preset.isActive = false;
+                affectedPresetIds.add(preset.id);
             }
+        });
+        Object.entries(data.lastPresetByTheme || {}).forEach(([themeId, presetId]) => {
+            if (affectedPresetIds.has(presetId)) delete data.lastPresetByTheme[themeId];
         });
         if (data.activePresetId) data.activePresetId = null;
     }
@@ -189,9 +212,11 @@
                 preset.themeName = String(currentTheme.name || currentTheme.id || '').trim();
             }
         });
+        data.lastPresetByTheme = normalizeLastPresetByTheme(data.lastPresetByTheme, data.presets);
         data.activePresetId = String(data.activePresetId || '').trim() || null;
         const activePreset = data.presets.find(preset => preset.id === data.activePresetId);
         if (activePreset && presetMatchesData(activePreset, data)) {
+            data.lastPresetByTheme[activePreset.themeId] = activePreset.id;
             data.presets.forEach(preset => {
                 if (preset.themeId === activePreset.themeId) preset.isActive = preset.id === activePreset.id;
             });
@@ -719,7 +744,8 @@
             charSettings: isCharScope ? normalized.charSettings : null,
             pseudoTarget: normalized.pseudoTarget,
             presets: normalized.presets,
-            activePresetId: normalized.activePresetId
+            activePresetId: normalized.activePresetId,
+            lastPresetByTheme: normalized.lastPresetByTheme
         };
         const settingsBackup = {
             pseudoTarget: backup.pseudoTarget
@@ -728,6 +754,7 @@
         if (backup.charSettings) settingsBackup.charSettings = backup.charSettings;
         settingsBackup.presets = backup.presets;
         settingsBackup.activePresetId = backup.activePresetId;
+        settingsBackup.lastPresetByTheme = backup.lastPresetByTheme;
         const imageReplacements = new Map();
         const hydrateImages = async frames => {
             for (const frame of frames || []) {
@@ -832,20 +859,28 @@
         themeBindingSyncPromise = themeBindingSyncPromise.then(async () => {
             if (getCurrentThemeSnapshot().id !== theme.id) return;
             const data = await DataManager.load();
-            const preset = data.presets.find(item => item.themeId === theme.id && item.isActive);
+            const rememberedPresetId = data.lastPresetByTheme[theme.id];
+            const preset = data.presets.find(item => item.id === rememberedPresetId && item.themeId === theme.id) ||
+                data.presets.find(item => item.themeId === theme.id && item.isActive);
             const userFrameExists = preset && preset.activeUserSrc && data.userFrames.some(frame => frame.src === preset.activeUserSrc);
             const charFrameExists = preset && preset.activeCharSrc && data.charFrames.some(frame => frame.src === preset.activeCharSrc);
             const nextUserFrameSrc = userFrameExists ? preset.activeUserSrc : null;
             const nextCharFrameSrc = charFrameExists ? preset.activeCharSrc : null;
             const nextPseudoTarget = preset && preset.pseudoTarget === 'before' ? 'before' : 'after';
             const nextPresetId = preset ? preset.id : null;
+            const activeStateChanged = data.presets.some(item => item.themeId === theme.id && item.isActive !== (item.id === nextPresetId));
+            const memoryChanged = preset && data.lastPresetByTheme[theme.id] !== preset.id;
             const changed = data.activeUserSrc !== nextUserFrameSrc || data.activeCharSrc !== nextCharFrameSrc ||
-                data.pseudoTarget !== nextPseudoTarget || data.activePresetId !== nextPresetId;
+                data.pseudoTarget !== nextPseudoTarget || data.activePresetId !== nextPresetId || activeStateChanged || memoryChanged;
             if (changed) {
                 data.activeUserSrc = nextUserFrameSrc;
                 data.activeCharSrc = nextCharFrameSrc;
                 data.pseudoTarget = nextPseudoTarget;
                 data.activePresetId = nextPresetId;
+                data.presets.forEach(item => {
+                    if (item.themeId === theme.id) item.isActive = item.id === nextPresetId;
+                });
+                if (preset) data.lastPresetByTheme[theme.id] = preset.id;
                 await DataManager.save(data);
             }
             await applyInjectedCSS(data);
@@ -2038,6 +2073,7 @@
                 });
                 currentData.presets.push(preset);
                 currentData.activePresetId = preset.id;
+                currentData.lastPresetByTheme[preset.themeId] = preset.id;
                 await DataManager.save(currentData);
                 renderPresets();
                 if (window.toastr) toastr.success('头像框预设已保存');
@@ -2055,6 +2091,7 @@
                     currentData.activeUserSrc = null;
                     currentData.activeCharSrc = null;
                     currentData.activePresetId = null;
+                    delete currentData.lastPresetByTheme[preset.themeId];
                     currentData.presets.forEach(item => {
                         if (item.themeId === preset.themeId) item.isActive = false;
                     });
@@ -2070,6 +2107,7 @@
                 currentData.activeCharSrc = currentData.charFrames.some(frame => frame.src === preset.activeCharSrc) ? preset.activeCharSrc : null;
                 currentData.pseudoTarget = preset.pseudoTarget === 'before' ? 'before' : 'after';
                 currentData.activePresetId = preset.id;
+                currentData.lastPresetByTheme[preset.themeId] = preset.id;
                 currentData.presets.forEach(item => {
                     if (item.themeId === preset.themeId) item.isActive = item.id === preset.id;
                 });
@@ -2093,6 +2131,7 @@
                 });
                 currentData.presets[presetIndex] = replacement;
                 currentData.activePresetId = preset.id;
+                currentData.lastPresetByTheme[replacement.themeId] = preset.id;
                 await DataManager.save(currentData);
                 renderPresets();
                 if (window.toastr) toastr.success(`当前配置已保存到预设“${preset.name}”`);
@@ -2120,6 +2159,9 @@
                 if (!ok) return;
                 currentData.presets = currentData.presets.filter(item => item.id !== presetId);
                 if (currentData.activePresetId === presetId) currentData.activePresetId = null;
+                Object.entries(currentData.lastPresetByTheme).forEach(([themeId, rememberedPresetId]) => {
+                    if (rememberedPresetId === presetId) delete currentData.lastPresetByTheme[themeId];
+                });
                 await DataManager.save(currentData);
                 renderPresets();
                 if (window.toastr) toastr.success('头像框预设已删除');
@@ -2501,7 +2543,8 @@
                 charSettings: currentData.charSettings,
                 pseudoTarget: currentData.pseudoTarget,
                 presets: currentData.presets,
-                activePresetId: currentData.activePresetId
+                activePresetId: currentData.activePresetId,
+                lastPresetByTheme: currentData.lastPresetByTheme
             };
             downloadJSON(exportData, 'Avatar_Frames_Backup.json');
         });
@@ -2559,8 +2602,14 @@
                 if (backup.pseudoTarget) currentData.pseudoTarget = backup.pseudoTarget;
                 if (backup.themeBindings || backup.presets) {
                     const knownPresetIds = new Set(currentData.presets.map(preset => preset.id));
-                    normalizeFrameData({ presets: backup.presets, themeBindings: backup.themeBindings, pseudoTarget: backup.pseudoTarget }).presets.forEach(preset => {
+                    const importedPresetData = normalizeFrameData({ presets: backup.presets, themeBindings: backup.themeBindings, pseudoTarget: backup.pseudoTarget, lastPresetByTheme: backup.lastPresetByTheme });
+                    importedPresetData.presets.forEach(preset => {
                         if (!knownPresetIds.has(preset.id)) currentData.presets.push(preset);
+                    });
+                    Object.entries(importedPresetData.lastPresetByTheme).forEach(([themeId, presetId]) => {
+                        if (currentData.presets.some(preset => preset.id === presetId && preset.themeId === themeId)) {
+                            currentData.lastPresetByTheme[themeId] = presetId;
+                        }
                     });
                 }
                 await DataManager.save(currentData);
@@ -2609,8 +2658,14 @@
                         if (json.pseudoTarget) currentData.pseudoTarget = json.pseudoTarget;
                         if (json.themeBindings || json.presets) {
                             const knownPresetIds = new Set(currentData.presets.map(preset => preset.id));
-                            normalizeFrameData({ presets: json.presets, themeBindings: json.themeBindings, pseudoTarget: json.pseudoTarget }).presets.forEach(preset => {
+                            const importedPresetData = normalizeFrameData({ presets: json.presets, themeBindings: json.themeBindings, pseudoTarget: json.pseudoTarget, lastPresetByTheme: json.lastPresetByTheme });
+                            importedPresetData.presets.forEach(preset => {
                                 if (!knownPresetIds.has(preset.id)) currentData.presets.push(preset);
+                            });
+                            Object.entries(importedPresetData.lastPresetByTheme).forEach(([themeId, presetId]) => {
+                                if (currentData.presets.some(preset => preset.id === presetId && preset.themeId === themeId)) {
+                                    currentData.lastPresetByTheme[themeId] = presetId;
+                                }
                             });
                         }
                     } 
