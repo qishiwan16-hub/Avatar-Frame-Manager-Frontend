@@ -6,7 +6,7 @@
     // 0. 全局配置区
     // ===========================
     const SCRIPT_NAME = "头像框管理"; 
-    const SCRIPT_VERSION = '3.0.0';
+    const SCRIPT_VERSION = '3.0.1';
     const STYLE_ID = 'native-avatar-frame-style'; 
     const APPLIED_STYLE_ID = 'st-avatar-frame-applied-css';
     const MENU_BTN_ID = 'st-avatar-frame-ext-btn';
@@ -927,7 +927,8 @@
                 const response = await fetch(`/api/extensions/${endpoint}`, {
                     method: 'POST',
                     headers: getExtensionRequestHeaders(),
-                    body: JSON.stringify({ extensionName, global })
+                    body: JSON.stringify({ extensionName, global }),
+                    signal: options.signal
                 });
                 if (response.ok) return { data: await response.json(), extensionName, global };
                 const text = await response.text();
@@ -953,25 +954,26 @@
         return 0;
     }
 
-    async function getLatestManifestVersion() {
+    async function getLatestManifestVersion(signal = null) {
         try {
-            const response = await fetch(`${EXTENSION_RAW_MANIFEST_URL}?afm=${Date.now()}`);
+            const response = await fetch(`${EXTENSION_RAW_MANIFEST_URL}?afm=${Date.now()}`, { signal });
             if (!response.ok) return '';
             const manifest = await response.json();
             return String(manifest.version || '').trim();
         } catch (error) {
+            if (error && error.name === 'AbortError') throw error;
             return '';
         }
     }
 
-    async function checkExtensionUpdate() {
+    async function checkExtensionUpdate(signal = null) {
         extensionUpdateState.phase = 'checking';
         extensionUpdateState.message = '正在检查 GitHub 更新...';
         extensionUpdateState.canUpdate = false;
-        extensionUpdateState.latestVersion = await getLatestManifestVersion();
-        const githubHasUpdate = compareVersions(extensionUpdateState.latestVersion, SCRIPT_VERSION) > 0;
         try {
-            const result = await requestExtensionApi('version');
+            extensionUpdateState.latestVersion = await getLatestManifestVersion(signal);
+            const githubHasUpdate = compareVersions(extensionUpdateState.latestVersion, SCRIPT_VERSION) > 0;
+            const result = await requestExtensionApi('version', { signal });
             extensionUpdateState.extensionName = result.extensionName;
             extensionUpdateState.global = result.global;
             extensionUpdateState.canUpdate = githubHasUpdate || result.data.isUpToDate === false;
@@ -980,6 +982,13 @@
                 ? `发现新版本${extensionUpdateState.latestVersion ? ` v${extensionUpdateState.latestVersion}` : ''}`
                 : `当前已是最新版本 v${SCRIPT_VERSION}`;
         } catch (error) {
+            if (error && error.name === 'AbortError') {
+                extensionUpdateState.phase = 'idle';
+                extensionUpdateState.message = '检查已取消';
+                extensionUpdateState.canUpdate = false;
+                return;
+            }
+            const githubHasUpdate = compareVersions(extensionUpdateState.latestVersion, SCRIPT_VERSION) > 0;
             extensionUpdateState.canUpdate = githubHasUpdate;
             extensionUpdateState.phase = githubHasUpdate ? 'available' : 'error';
             extensionUpdateState.message = githubHasUpdate
@@ -1360,6 +1369,7 @@
             .afm-backup-btn.primary { background: var(--SmartThemeQuoteColor); color: white; }
             .afm-update-status { padding: 9px 10px; margin-bottom: 10px; border-left: 3px solid var(--SmartThemeQuoteColor); background: rgba(0,0,0,0.04); font-size: 0.84em; line-height: 1.45; overflow-wrap: anywhere; }
             .afm-update-status.error { border-left-color: #d65353; color: #d65353; }
+            .afm-update-card { border-color: var(--SmartThemeQuoteColor); box-shadow: inset 3px 0 0 var(--SmartThemeQuoteColor); }
             .afm-storage-status { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-left: 3px solid var(--SmartThemeQuoteColor); background: rgba(0,0,0,0.04); }
             .afm-storage-status i { width: 18px; text-align: center; color: var(--SmartThemeQuoteColor); }
             .afm-storage-status strong, .afm-storage-status span { display: block; }
@@ -1565,6 +1575,16 @@
 
         return `
             <div class="afm-settings-container">
+                <div class="afm-setting-group afm-update-card">
+                    <div class="afm-setting-header">
+                        <span><i class="fa-solid fa-cloud-arrow-down"></i> 扩展更新</span>
+                    </div>
+                    <div class="afm-update-status ${extensionUpdateState.phase === 'error' ? 'error' : ''}">${escapeHTML(extensionUpdateState.message)}</div>
+                    <div class="afm-backup-actions">
+                        <button class="afm-backup-btn" id="afm-check-update" ${extensionUpdateState.phase === 'checking' || extensionUpdateState.phase === 'updating' ? 'disabled' : ''}><i class="fa-solid fa-arrows-rotate ${extensionUpdateState.phase === 'checking' ? 'fa-spin' : ''}"></i> 检查更新</button>
+                        ${extensionUpdateState.canUpdate ? `<button class="afm-backup-btn primary" id="afm-apply-update"><i class="fa-solid fa-download"></i> 更新${extensionUpdateState.latestVersion ? `到 v${escapeHTML(extensionUpdateState.latestVersion)}` : ''}</button>` : ''}
+                    </div>
+                </div>
                 <div class="afm-storage-status">
                     <i class="fa-solid ${storageStatus.icon}"></i>
                     <div><strong>${storageStatus.title}</strong><span>${storageStatus.detail}</span></div>
@@ -1611,16 +1631,6 @@
                     <div class="afm-backup-actions">
                         <button class="afm-backup-btn primary" id="btn-export-zip-all"><i class="fa-solid fa-file-zipper"></i> 导出完整 ZIP</button>
                         <button class="afm-backup-btn" id="btn-import-plugin-zip"><i class="fa-solid fa-upload"></i> 导入本插件备份 ZIP</button>
-                    </div>
-                </div>
-                <div class="afm-setting-group">
-                    <div class="afm-setting-header">
-                        <span><i class="fa-solid fa-cloud-arrow-down"></i> 扩展更新</span>
-                    </div>
-                    <div class="afm-update-status ${extensionUpdateState.phase === 'error' ? 'error' : ''}">${escapeHTML(extensionUpdateState.message)}</div>
-                    <div class="afm-backup-actions">
-                        <button class="afm-backup-btn" id="afm-check-update" ${extensionUpdateState.phase === 'checking' || extensionUpdateState.phase === 'updating' ? 'disabled' : ''}><i class="fa-solid fa-arrows-rotate ${extensionUpdateState.phase === 'checking' ? 'fa-spin' : ''}"></i> 检查更新</button>
-                        ${extensionUpdateState.canUpdate ? `<button class="afm-backup-btn primary" id="afm-apply-update"><i class="fa-solid fa-download"></i> 更新${extensionUpdateState.latestVersion ? `到 v${escapeHTML(extensionUpdateState.latestVersion)}` : ''}</button>` : ''}
                     </div>
                 </div>
             </div>
@@ -1768,6 +1778,8 @@
 
         const $popup = $(popupHTML);
         $('body').append($popup);
+        const panelAbortController = new AbortController();
+        let popupClosed = false;
         $popup.find('#afm-theme-toggle').on('click', function() {
             const darkModeEnabled = !$popup.hasClass('afm-dark-mode');
             $popup.toggleClass('afm-dark-mode', darkModeEnabled);
@@ -1925,6 +1937,8 @@
 
         // --- 绑定关闭逻辑 ---
         const closePopup = () => {
+            popupClosed = true;
+            panelAbortController.abort();
             if (themeBindingAppliedHandler) window.removeEventListener('afm-theme-binding-applied', themeBindingAppliedHandler);
             $popup.fadeOut(200, () => $popup.remove());
         };
@@ -2143,8 +2157,8 @@
                 extensionUpdateState.message = '正在检查 GitHub 更新...';
                 extensionUpdateState.canUpdate = false;
                 renderSettings();
-                await checkExtensionUpdate();
-                renderSettings();
+                await checkExtensionUpdate(panelAbortController.signal);
+                if (!popupClosed) renderSettings();
             });
 
             $popup.find('#afm-apply-update').on('click', async function() {

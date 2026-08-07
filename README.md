@@ -18,6 +18,8 @@
 
 设置页的 User、Char 位置数值为全局固定值，不会写入预设。旧版本的美化绑定会在首次读取时自动合并到对应美化的预设中；已有相同头像框组合的预设会直接复用，不重复保存。
 
+设置页最上方显示扩展更新状态和检查按钮。关闭插件面板会取消仍在进行的更新检查，避免检测请求卡住；已经开始执行的扩展更新不会被中断。
+
 ## 后端存储
 
 本扩展支持酒馆服务器插件 [`Avatar-Frame-Manager-Backend`](https://github.com/qishiwan16-hub/Avatar-Frame-Manager-Backend)。安装后端并开启 `enableServerPlugins` 后，扩展会自动检测 `/api/plugins/avatar-frame-manager`：头像框配置和按美化保存的预设保存在服务器，图片按内容哈希去重；后端不可用时自动回退到浏览器 IndexedDB。首次检测到空后端时，会自动迁移现有本地数据。
